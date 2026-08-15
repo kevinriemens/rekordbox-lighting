@@ -139,12 +139,12 @@ Reopen rekordbox and your changes are there.
 | See what a change would do | run the command **without** `--write` |
 | Actually apply it | add `--write` |
 | Send the working copy back to rekordbox | `rbxlight push --write` |
+| Delete one of my own macros | `rbxlight macro delete 10007 --write` |
+| Redo the light positions from scratch | `rbxlight layout regenerate --write` |
+| List my backups | `rbxlight restore` |
+| Roll back to a backup | `rbxlight restore --from <name>` |
 
 `rbxlight --help` lists everything. `rbxlight <command> --help` explains one command.
-
-> **Not every command is wired up yet.** `pull`, `push` and `restore` currently exist as Python
-> functions rather than CLI commands — see [Undoing a mistake](#undoing-a-mistake) for the exact
-> incantation. This is a known gap and is on the backlog.
 
 ---
 
@@ -190,16 +190,17 @@ for r in c.execute('SELECT id, name FROM venue'):
 Every write leaves a timestamped folder in `backups/`. To roll back:
 
 ```bash
-ls backups/          # find the one from before the mistake
+rbxlight restore     # lists your backups, newest first — changes nothing
 ```
 
+Pick the one from before the mistake, then:
+
 ```bash
-python3 -c "
-from pathlib import Path
-from rbxlight import safety
-safety.restore_from_backup(Path('backups/2026-08-14T184537568265Z'))
-"
+rbxlight restore --from 2026-08-14T184537568265Z
 ```
+
+It checks the backup isn't corrupt, shows you exactly which files it's about to overwrite, and asks
+you to confirm before touching anything. Add `--yes` to skip the question.
 
 That restores your databases exactly as they were, verified by checksum.
 
@@ -211,9 +212,9 @@ of not restoring is a broken show.
 ## Things that will confuse you
 
 **"I fixed the layout but the preview looks the same."**
-The tool never overwrites positions you've adjusted — so an improved default can't reach you.
-Delete `work/layouts/layout_venue_<id>.json` and run `preview` again to regenerate from scratch.
-(A proper `layout regenerate --force` is on the backlog.)
+The tool never overwrites positions you've adjusted — so an improved default can't reach you. Run
+`rbxlight layout regenerate` to see what a fresh layout would move, then `--write` to apply it. Your
+pan/tilt sweep settings survive; only the positions and mounting rotations are recalculated.
 
 **"push says the files changed since I pulled."**
 rekordbox (or you) modified the live databases after your `pull`. Pushing would destroy those
@@ -246,7 +247,7 @@ src/rbxlight/
 work/               your working copy — safe to experiment in
   layouts/          where your light positions live
 backups/            timestamped safety copies
-tests/              427 tests
+tests/              476 tests
 ```
 
 Your real rekordbox data lives **outside this project**, at

@@ -185,6 +185,66 @@ class RigLayout:
     unmapped_cell_ids: tuple[int, ...] = ()
 
 
+@dataclass(frozen=True)
+class LayoutDiffEntry:
+    """One fixture's difference between two RigLayouts, as produced by
+    diff_layouts(). Either side may be None: absent from `old` means the
+    fixture is new (no "old" side); absent from `new` means it no longer
+    exists (no "new" side).
+    """
+
+    fixture_id: int
+    label: str
+    old_x: float | None
+    old_y: float | None
+    old_rotation: float | None
+    new_x: float | None
+    new_y: float | None
+    new_rotation: float | None
+
+
+def diff_layouts(old: RigLayout, new: RigLayout) -> tuple[LayoutDiffEntry, ...]:
+    """Pure diff between two layouts, by fixture_id. Unchanged fixtures
+    (identical x, y, and rotation on both sides) are omitted entirely.
+    Deterministically ordered by fixture_id, regardless of the order
+    entries appear in either input.
+    """
+    old_by_id = {entry.fixture_id: entry for entry in old.entries}
+    new_by_id = {entry.fixture_id: entry for entry in new.entries}
+
+    diffs: list[LayoutDiffEntry] = []
+    for fixture_id in sorted(set(old_by_id) | set(new_by_id)):
+        old_entry = old_by_id.get(fixture_id)
+        new_entry = new_by_id.get(fixture_id)
+
+        if old_entry is not None and new_entry is not None:
+            unchanged = (
+                old_entry.x == new_entry.x
+                and old_entry.y == new_entry.y
+                and old_entry.rotation == new_entry.rotation
+            )
+            if unchanged:
+                continue
+
+        reference_entry = old_entry if old_entry is not None else new_entry
+        assert reference_entry is not None  # fixture_id came from old_by_id | new_by_id
+        label = reference_entry.label
+        diffs.append(
+            LayoutDiffEntry(
+                fixture_id=fixture_id,
+                label=label,
+                old_x=old_entry.x if old_entry is not None else None,
+                old_y=old_entry.y if old_entry is not None else None,
+                old_rotation=old_entry.rotation if old_entry is not None else None,
+                new_x=new_entry.x if new_entry is not None else None,
+                new_y=new_entry.y if new_entry is not None else None,
+                new_rotation=new_entry.rotation if new_entry is not None else None,
+            )
+        )
+
+    return tuple(diffs)
+
+
 @dataclass
 class _BarGroup:
     """Internal grouping used while generating a layout: one tilt block

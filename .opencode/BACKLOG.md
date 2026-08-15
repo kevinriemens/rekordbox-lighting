@@ -8,12 +8,6 @@ Raw ideas and future work. Items here need refinement before development.
 
 ### Items
 
-- [ ] **Stale layout trap — `rbxlight layout regenerate --force`**
-  After a layout-algorithm change, the non-destructive merge faithfully preserves the OLD positions,
-  so a fix appears to have had no effect. Currently the only cure is deleting
-  `work/layouts/layout_venue_<id>.json` by hand. Hit three separate times during the visualizer work.
-  Needs a CLI command to rebuild, ideally with a diff of what would move and a confirmation prompt.
-
 - [ ] **4th LPC008S par is unpatched in venue 2**
   I physically own 4 pars (2 left of the arch on the ground, 2 right). rekordbox venue 2 only
   patches 3 (ch143, ch150, ch157). Not a tool bug — a gap in the rekordbox patch. Decide whether to
@@ -30,15 +24,11 @@ Raw ideas and future work. Items here need refinement before development.
 
 ### Items
 
-- [ ] **Wire `pull` / `push` / `restore` into the CLI**
-  Implemented and tested as library functions in M1, but never exposed as commands — the test contract
-  only specified CLI behavior for `macro create`. Today these require a Python one-liner, which is
-  unacceptable for `restore`, the command you'd reach for in a panic. `restore` is the priority.
-
-- [ ] **Remove the M1 test macros**
+- [ ] **Remove the M1 test macros** *(tool now exists — this is just the chore)*
   `10007 AI TEST CLONE` and `10008 AI TEST SWEEP` are still in the live macro library. They served
-  their purpose (proving rekordbox accepts externally-written macros). Needs a `macro delete` that
-  respects the factory-immutability rule.
+  their purpose (proving rekordbox accepts externally-written macros). `rbxlight macro delete` now
+  exists and respects factory-immutability, so this is:
+  `pull` → `macro delete 10007 --write` → `macro delete 10008 --write` → `push --write`.
 
 - [ ] **Pretty-print generated XML**
   rekordbox writes 2-space-indented `LightingEditModel` payloads; ours are compact single-line.
@@ -92,6 +82,43 @@ Raw ideas and future work. Items here need refinement before development.
   `HIGH CHORUS1 COOL` alone fires 5596×. Spread tracks across all 27 patterns using BPM/energy
   heuristics. Dry-run diff first, fully reversible. This is the change that most affects how a
   4-hour set actually feels, and it requires no change to how I play.
+
+- [ ] **Custom banks — own the 8 mood banks before trying to invent a 9th**
+  *Researched 2026-08-15 against the live DBs. Findings below are measured, not assumed.*
+
+  A "bank" is a row in `macro.db3.macro_pattern`, which is nothing but the cross product
+  `energy (1=HIGH, 2=MID, 3=LOW) × pattern (1..8, plus 99)`:
+  `1=COOL 2=NATURAL 3=HOT 4=SUBTLE 5=WARM 6=VIVID 7=CLUB1 8=CLUB2`, `99` = the 6-phase
+  INTERLUDE set. 3 × 9 = the 27 `macro_pattern` ids. `content.macro_pattern_id` is how a track
+  picks one; `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` is how a bank
+  picks a macro per phrase slot (11 phases for HIGH, 10 for MID, 6 for LOW/INTERLUDE).
+
+  **The names live nowhere in any database.** Not `macro.db3`, not `user.db3`, not `master.db3` —
+  there is no name/label column on `macro_pattern` at all. COOL/NATURAL/… are hardcoded UI strings
+  in the rekordbox binary, keyed off the `pattern` integer. So "add a custom bank *with a name*"
+  is not something the schema can express.
+
+  **The far more valuable finding:** all 232 `macro_assign` slots across the 27 banks point at
+  factory macros (`preset=1`). Zero point at a user macro. The bank mechanism is fully rewritable
+  and completely untouched — swap a slot's `macro_id` to a `preset=0` macro (10001+) and that bank
+  now plays my programming. Taking over e.g. CLUB1 and CLUB2 across all three energies yields
+  6 banks × up to 11 phases = ~62 slots of entirely custom show, today, with no schema risk.
+  The label stays "CLUB1"; everything behind it is mine. This is the real feature, and it composes
+  with M4 (rebalance decides *which* bank a track gets, this decides *what a bank plays*).
+
+  **A genuinely 9th bank (`pattern=9`, new `macro_pattern` id 28) is speculative.** Inserting the
+  row and pointing `content.macro_pattern_id` at it is trivial; whether rekordbox honours it is not
+  known. Two failure modes to test for: the mood selector is almost certainly a fixed 8-button row,
+  so the bank would be unreachable and unlabeled in the UI, and touching that selector for a track
+  would snap it back into 1..8; and rekordbox may prune `macro_pattern`/`content` rows it does not
+  recognise on load. Cost to find out is one experiment — insert id 28, point one throwaway track at
+  it, launch rekordbox, re-read. Backup first; this touches `content`, which holds 2943 rows of real
+  work. **Do the takeover work first — it delivers the same outcome without betting on the unknown.**
+
+  Related: `lighting_property` holds live panel state `MoodLastId=2`, `BankLastId=3`,
+  `PhraseLastId=2`, `StrobeLastId=1`. Inferred (needs one glance at the rekordbox UI to confirm):
+  the panel's MOOD selector = `pattern`, its BANK selector = `energy`. Worth pinning down before
+  writing any user-facing copy, so the tool's vocabulary matches rekordbox's.
 
 - [ ] **Calibrate the visualizer against the real rig**
   The preview renders OUR interpretation of the format, not rekordbox's engine. Movement patterns

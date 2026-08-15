@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -187,6 +188,47 @@ def restore_from_backup(backup_dir: Path) -> None:
                 f"restore of {name} failed verification: live file does not match "
                 f"the backup's recorded sha256 after copying."
             )
+
+
+@dataclass(frozen=True)
+class BackupInfo:
+    """One backup's summary, as returned by list_backups() — enough for
+    `rbxlight restore` to list and let a user choose between backups
+    without re-parsing manifest.json itself.
+    """
+
+    name: str
+    timestamp: str
+    trigger_command: str
+    files: dict[str, dict]
+
+
+def list_backups() -> list[BackupInfo]:
+    """Scan BACKUP_ROOT for backup directories (each holding a
+    manifest.json) and return their summaries newest-first, ordered by
+    directory name (a sortable UTC timestamp). Read-only. Returns an
+    empty list if BACKUP_ROOT doesn't exist or holds no backups.
+    """
+    if not BACKUP_ROOT.exists():
+        return []
+
+    infos: list[BackupInfo] = []
+    for entry in BACKUP_ROOT.iterdir():
+        manifest_path = entry / "manifest.json"
+        if not entry.is_dir() or not manifest_path.exists():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        infos.append(
+            BackupInfo(
+                name=entry.name,
+                timestamp=manifest["timestamp"],
+                trigger_command=manifest["trigger_command"],
+                files=manifest["files"],
+            )
+        )
+
+    infos.sort(key=lambda info: info.name, reverse=True)
+    return infos
 
 
 def connect_readonly(db_name: str) -> sqlite3.Connection:

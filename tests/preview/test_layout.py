@@ -1464,3 +1464,180 @@ class TestSaveLayoutAtomicity:
 
         # Then: no truncated/corrupt file was left at the final path
         assert not path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Pure layout-comparison helper (task requirement: "Pure layout-comparison
+# helper") — the diff engine behind `rbxlight layout regenerate`'s dry-run
+# report. No filesystem or database involvement; tested directly here,
+# independent of the CLI.
+# ---------------------------------------------------------------------------
+
+
+class TestDiffLayouts:
+    def test_should_report_no_differences_for_two_identical_layouts(self) -> None:
+        # Given: two structurally identical layouts
+        entries = (
+            LayoutEntry(fixture_id=1, x=0.2, y=0.3, label="Head 1", kind="moving_head"),
+            LayoutEntry(fixture_id=2, x=0.5, y=0.5, label="Par 1", kind="par"),
+        )
+        old = RigLayout(venue_id=2, entries=entries)
+        new = RigLayout(venue_id=2, entries=entries)
+
+        # When: diffing
+        result = layout.diff_layouts(old, new)
+
+        # Then: no differences at all
+        assert result == ()
+
+    def test_should_report_an_entry_that_moved(self) -> None:
+        # Given: the same fixture at two different positions
+        old = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1, x=0.2, y=0.3, label="Head 1", kind="moving_head"
+                ),
+            ),
+        )
+        new = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1, x=0.8, y=0.9, label="Head 1", kind="moving_head"
+                ),
+            ),
+        )
+
+        # When: diffing
+        result = layout.diff_layouts(old, new)
+
+        # Then: exactly one differing entry, identified by label, with both
+        # old and new positions reported
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.fixture_id == 1
+        assert entry.label == "Head 1"
+        assert entry.old_x == 0.2
+        assert entry.old_y == 0.3
+        assert entry.new_x == 0.8
+        assert entry.new_y == 0.9
+
+    def test_should_report_an_entry_that_only_rotated(self) -> None:
+        # Given: the same position, different rotation
+        old = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1,
+                    x=0.2,
+                    y=0.3,
+                    label="Head 1",
+                    kind="moving_head",
+                    rotation=0.0,
+                ),
+            ),
+        )
+        new = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1,
+                    x=0.2,
+                    y=0.3,
+                    label="Head 1",
+                    kind="moving_head",
+                    rotation=45.0,
+                ),
+            ),
+        )
+
+        # When: diffing
+        result = layout.diff_layouts(old, new)
+
+        # Then: reported, with unchanged position and a differing rotation
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.old_x == entry.new_x == 0.2
+        assert entry.old_y == entry.new_y == 0.3
+        assert entry.old_rotation == 0.0
+        assert entry.new_rotation == 45.0
+
+    def test_should_report_an_entry_present_only_in_the_old_layout(self) -> None:
+        # Given: a fixture that existed in the saved layout but not the fresh one
+        old = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1, x=0.2, y=0.3, label="Removed Head", kind="moving_head"
+                ),
+            ),
+        )
+        new = RigLayout(venue_id=2, entries=())
+
+        # When: diffing
+        result = layout.diff_layouts(old, new)
+
+        # Then: reported by label, with no "new" side
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.fixture_id == 1
+        assert entry.label == "Removed Head"
+        assert entry.new_x is None
+        assert entry.new_y is None
+        assert entry.new_rotation is None
+
+    def test_should_report_an_entry_present_only_in_the_new_layout(self) -> None:
+        # Given: a fixture that's newly patched, absent from the saved layout
+        old = RigLayout(venue_id=2, entries=())
+        new = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(fixture_id=2, x=0.6, y=0.1, label="New Par", kind="par"),
+            ),
+        )
+
+        # When: diffing
+        result = layout.diff_layouts(old, new)
+
+        # Then: reported by label, with no "old" side
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.fixture_id == 2
+        assert entry.label == "New Par"
+        assert entry.old_x is None
+        assert entry.old_y is None
+        assert entry.old_rotation is None
+
+    def test_should_produce_the_same_ordered_result_regardless_of_entry_order(
+        self,
+    ) -> None:
+        # Given: the same two logical layouts, but entries listed in
+        # different orders within each
+        moved_old = LayoutEntry(
+            fixture_id=1, x=0.2, y=0.3, label="Head 1", kind="moving_head"
+        )
+        moved_new = LayoutEntry(
+            fixture_id=1, x=0.9, y=0.9, label="Head 1", kind="moving_head"
+        )
+        unchanged = LayoutEntry(fixture_id=2, x=0.5, y=0.5, label="Par 1", kind="par")
+        removed_only_old = LayoutEntry(
+            fixture_id=3, x=0.1, y=0.1, label="Gone", kind="par"
+        )
+
+        old_forward = RigLayout(
+            venue_id=2, entries=(moved_old, unchanged, removed_only_old)
+        )
+        old_shuffled = RigLayout(
+            venue_id=2, entries=(removed_only_old, unchanged, moved_old)
+        )
+        new_forward = RigLayout(venue_id=2, entries=(moved_new, unchanged))
+        new_shuffled = RigLayout(venue_id=2, entries=(unchanged, moved_new))
+
+        # When: diffing both orderings
+        result_forward = layout.diff_layouts(old_forward, new_forward)
+        result_shuffled = layout.diff_layouts(old_shuffled, new_shuffled)
+
+        # Then: identical ordered results regardless of input entry order
+        assert result_forward == result_shuffled
+        assert [e.fixture_id for e in result_forward] == [1, 3]

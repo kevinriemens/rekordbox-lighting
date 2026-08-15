@@ -322,3 +322,65 @@ class TestAssert25Rows:
         # When / Then: assertion fails
         with pytest.raises(AssertionError):
             safety.assert_25_rows(conn, macro_id=1)
+
+
+class TestListBackups:
+    """`safety.list_backups()` — the library-level backup enumeration that
+    `rbxlight restore` (no identifier given) lists newest-first. Contract:
+    task requirement C, "Invoked with no backup identifier".
+    """
+
+    def test_should_return_empty_list_when_backup_root_does_not_exist(
+        self, fake_backup_root: Path
+    ) -> None:
+        # Given: a backup root that was never created
+        assert not fake_backup_root.exists()
+
+        # When: listing backups
+        result = safety.list_backups()
+
+        # Then: an empty list, not an error
+        assert result == []
+
+    def test_should_return_empty_list_when_backup_root_is_empty(
+        self, fake_backup_root: Path
+    ) -> None:
+        # Given: an existing but empty backup root
+        fake_backup_root.mkdir(parents=True)
+
+        # When: listing backups
+        result = safety.list_backups()
+
+        # Then: no backups, not an error
+        assert result == []
+
+    def test_should_list_backups_newest_first(
+        self, fake_lightingdb: Path, fake_backup_root: Path
+    ) -> None:
+        # Given: two backups taken back to back
+        first = safety.backup_all("trigger 1")
+        second = safety.backup_all("trigger 2")
+
+        # When: listing backups
+        result = safety.list_backups()
+
+        # Then: newest first
+        assert [b.name for b in result] == [second.name, first.name]
+
+    def test_should_include_timestamp_trigger_and_files_for_each_backup(
+        self, fake_lightingdb: Path, fake_backup_root: Path
+    ) -> None:
+        # Given: one backup with a known trigger command
+        backup_dir = safety.backup_all("macro delete --write 10001")
+
+        # When: listing backups
+        result = safety.list_backups()
+
+        # Then: enough information to choose between them
+        assert len(result) == 1
+        info = result[0]
+        assert info.name == backup_dir.name
+        assert info.trigger_command == "macro delete --write 10001"
+        assert info.timestamp
+        assert "macro.db3" in info.files
+        assert "user.db3" in info.files
