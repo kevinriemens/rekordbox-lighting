@@ -1,0 +1,1344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rbxlight macro preview</title>
+<script type="application/json" id="rbxlight-payload">/*__RBXLIGHT_PAYLOAD__*/</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: #08090c; color: #e8e8ec;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  header {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid #22242c; background: #0d0f14;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: 0.2px; }
+  header .venue { font-size: 12px; color: #9aa0ac; }
+  header .note { margin-left: auto; font-size: 11px; color: #6c7280; font-style: italic; max-width: 46ch; }
+  .controls {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 8px 16px; border-bottom: 1px solid #1c1e26; background: #101218;
+  }
+  .controls button {
+    background: #1c1f28; border: 1px solid #2c303c; color: #e8e8ec;
+    padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer;
+  }
+  .controls button:hover { background: #262a36; }
+  .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .controls button:focus-visible,
+  .controls input:focus-visible { outline: 2px solid #5ad1ff; outline-offset: 2px; }
+  .controls label {
+    font-size: 12px; color: #9aa0ac; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .controls input[type="number"] {
+    width: 62px; background: #14161c; border: 1px solid #2c303c; color: #e8e8ec;
+    border-radius: 4px; padding: 4px 6px; font-size: 13px;
+  }
+  #scrub { flex: 1 1 220px; min-width: 140px; accent-color: #5ad1ff; }
+  .readout {
+    font-variant-numeric: tabular-nums; font-size: 12px; color: #c7cbd4; white-space: nowrap;
+  }
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+    padding: 6px 16px; font-size: 11px;
+    color: #8890a0; border-bottom: 1px solid #1c1e26; background: #0b0c10;
+  }
+  .legend .item { display: flex; align-items: center; gap: 5px; }
+  .legend .hint { margin-left: auto; color: #6c7280; }
+  #stage-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
+  #stage { display: block; width: 100%; height: 100%; touch-action: none; cursor: default; }
+  #stage:focus-visible { outline: 2px solid #5ad1ff; outline-offset: -2px; }
+  .empty-state {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #5a606e; font-size: 14px;
+  }
+  .empty-state[hidden] { display: none; }
+
+  .layout-panel {
+    position: absolute; top: 12px; right: 12px; width: 240px; max-height: calc(100% - 24px);
+    overflow-y: auto; background: rgba(13, 15, 20, 0.92); border: 1px solid #22242c;
+    border-radius: 8px; padding: 10px 12px 12px; font-size: 12px; color: #c7cbd4;
+  }
+  .layout-panel h2 {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 0 0 8px; color: #8890a0; font-weight: 600;
+  }
+  .panel-section + .panel-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid #1c1e26; }
+  .panel-hint { margin: 0 0 8px; color: #6c7280; font-size: 11px; line-height: 1.4; }
+  .sel-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;
+  }
+  .sel-row .k { color: #8890a0; flex: 0 0 auto; }
+  .sel-row .v { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rotation-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .rotation-row label { color: #8890a0; flex: 0 0 auto; }
+  #rotationSlider { flex: 1 1 auto; accent-color: #5ad1ff; }
+  #rotationReadout { font-variant-numeric: tabular-nums; width: 3.4em; text-align: right; }
+  .panel-actions { display: flex; flex-direction: column; gap: 6px; }
+  .panel-actions button {
+    background: #1c1f28; border: 1px solid #2c303c; color: #e8e8ec;
+    padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; text-align: left;
+  }
+  .panel-actions button:hover { background: #262a36; }
+  .panel-actions button:focus-visible { outline: 2px solid #5ad1ff; outline-offset: 2px; }
+  .layout-panel code {
+    background: #14161c; padding: 1px 4px; border-radius: 3px; font-size: 10px; word-break: break-all;
+  }
+  #layoutStatus { min-height: 14px; margin: 8px 0 0; color: #8fffb0; font-size: 11px; }
+  #layoutStatus.error { color: #ff9fd0; }
+  #jsonPreview {
+    width: 100%; margin-top: 8px; background: #0b0c10; color: #9aa0ac; border: 1px solid #22242c;
+    border-radius: 6px; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    resize: vertical; padding: 6px;
+  }
+  .layout-panel input[type="number"] {
+    width: 60px; background: #14161c; border: 1px solid #2c303c; color: #e8e8ec;
+    border-radius: 4px; padding: 3px 6px; font-size: 12px;
+  }
+  .sweep-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .sweep-row label { color: #8890a0; flex: 0 0 auto; }
+  .sweep-row span { color: #c7cbd4; font-size: 11px; }
+
+  /* Secondary, quieter top-down plan view — never competes with the main
+     front elevation for attention; read-only, click/drag pass through. */
+  .plan-panel {
+    position: absolute; left: 12px; bottom: 12px; width: 220px;
+    background: rgba(9, 10, 14, 0.7); border: 1px solid #1c1e26;
+    border-radius: 8px; padding: 8px 10px 6px; pointer-events: none;
+  }
+  .plan-panel h2 {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 0 0 6px; color: #6c7280; font-weight: 600;
+  }
+  #planStage { display: block; width: 100%; height: 120px; opacity: 0.9; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="macroName"></h1>
+  <div class="venue" id="venueName"></div>
+  <div class="note">
+    Preview of our interpretation of the rekordbox macro format — not rekordbox's actual output.
+  </div>
+</header>
+
+<div class="controls">
+  <button id="playBtn" type="button" aria-pressed="false">▶ Play</button>
+  <label for="loopChk"><input type="checkbox" id="loopChk" checked> Loop</label>
+  <label for="bpmInput">BPM <input type="number" id="bpmInput" min="1" max="999" step="1"></label>
+  <input type="range" id="scrub" min="0" max="0" step="0.01" value="0" aria-label="Beat position in macro">
+  <span class="readout" id="beatReadout">beat 0.00 / 0</span>
+  <span class="readout" id="timeReadout">0:00.0</span>
+</div>
+
+<div class="legend" id="legend" aria-hidden="true">
+  <span class="hint">Click a fixture to select it, drag to reposition — see the layout panel to rotate &amp; save.</span>
+</div>
+
+<div id="stage-wrap">
+  <canvas id="stage" tabindex="0" aria-label="Rig layout stage. Click a fixture to select, drag to reposition, arrow keys to nudge."></canvas>
+  <div class="empty-state" id="emptyState" hidden>No fixtures patched into this venue.</div>
+
+  <div class="plan-panel" id="planPanel">
+    <h2>Plan view — top-down (secondary)</h2>
+    <canvas id="planStage" aria-hidden="true"></canvas>
+  </div>
+
+  <div class="layout-panel" id="layoutPanel">
+    <div class="panel-section" id="selSection">
+      <h2>Selected fixture</h2>
+      <p class="panel-hint" id="selEmpty">Nothing selected. Click a fixture on stage.</p>
+      <div id="selBody" hidden>
+        <div class="sel-row"><span class="k">Label</span><span class="v" id="selLabel"></span></div>
+        <div class="sel-row"><span class="k">Slot</span><span class="v" id="selSlot"></span></div>
+        <div class="sel-row"><span class="k">Kind</span><span class="v" id="selKind"></span></div>
+        <div class="rotation-row">
+          <label for="rotationSlider">Rotation</label>
+          <input type="range" id="rotationSlider" min="0" max="359" step="1" value="0"
+                 aria-label="Selected fixture rotation in degrees">
+          <span id="rotationReadout">0°</span>
+        </div>
+        <div class="sweep-row" id="panDegreesRow" hidden>
+          <label for="panDegreesInput">Pan sweep</label>
+          <input type="number" id="panDegreesInput" min="0" max="1080" step="1"
+                 aria-label="Selected fixture pan sweep in degrees">
+          <span>&deg; total</span>
+        </div>
+        <div class="sweep-row" id="tiltDegreesRow" hidden>
+          <label for="tiltDegreesInput">Tilt sweep</label>
+          <input type="number" id="tiltDegreesInput" min="0" max="720" step="1"
+                 aria-label="Selected fixture tilt sweep in degrees">
+          <span>&deg; total</span>
+        </div>
+      </div>
+    </div>
+    <div class="panel-section">
+      <h2>Layout</h2>
+      <p class="panel-hint">Saves as <code id="layoutPath"></code></p>
+      <div class="panel-actions">
+        <button id="downloadLayoutBtn" type="button">⬇ Download layout JSON</button>
+        <button id="copyLayoutBtn" type="button">⧉ Copy layout JSON</button>
+        <button id="resetLayoutBtn" type="button">↺ Reset to generated layout</button>
+      </div>
+      <p id="layoutStatus" role="status" aria-live="polite"></p>
+      <textarea id="jsonPreview" rows="4" readonly hidden aria-label="Layout JSON, select and copy manually if needed"></textarea>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var RBXLIGHT_PAYLOAD = JSON.parse(
+    document.getElementById("rbxlight-payload").textContent
+  );
+
+  // ---------------------------------------------------------------------
+  // Small numeric helpers
+  // ---------------------------------------------------------------------
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function lerp(a, b, f) { return a + (b - a) * f; }
+  function normalizeDeg(d) { return ((d % 360) + 360) % 360; }
+
+  // ---------------------------------------------------------------------
+  // Curve evaluation — shared by brightness / colour / strobe / rotate /
+  // position. All of these are piecewise-linear over beats.
+  // ---------------------------------------------------------------------
+
+  // Brightness is a single PointBlock: {xleft, xright, points:[{x,y,type}]}.
+  // Points are already ascending by x from the Python side, but we don't
+  // rely on that here beyond a linear scan.
+  function evalBrightnessPoints(points, t) {
+    if (!points || points.length === 0) return 0;
+    if (t <= points[0].x) return points[0].y;
+    for (var i = 0; i < points.length - 1; i++) {
+      var p0 = points[i], p1 = points[i + 1];
+      if (t <= p1.x) {
+        var dx = p1.x - p0.x;
+        if (dx <= 1e-9) return p1.y; // instantaneous jump: already landed
+        var frac = clamp((t - p0.x) / dx, 0, 1);
+        return lerp(p0.y, p1.y, frac);
+      }
+    }
+    return points[points.length - 1].y;
+  }
+
+  // colour / strobe / rotate / position are all lists of blocks, each
+  // spanning [xleft, xright]. Pick the last block whose xleft <= t (holds
+  // that block's "right" value once t passes its xright, until a later
+  // block's xleft catches up to t) and report how far into it we are.
+  function pickActiveBlock(blocks, t) {
+    if (!blocks || blocks.length === 0) return null;
+    var active = blocks[0];
+    for (var i = 0; i < blocks.length; i++) {
+      if (t >= blocks[i].xleft) active = blocks[i]; else break;
+    }
+    var span = active.xright - active.xleft;
+    var frac = span > 1e-9
+      ? clamp((t - active.xleft) / span, 0, 1)
+      : (t >= active.xright ? 1 : 0);
+    return { block: active, frac: frac };
+  }
+
+  function evalColour(blocks, t) {
+    var picked = pickActiveBlock(blocks, t);
+    if (!picked) return null;
+    var b = picked.block, f = picked.frac;
+    return {
+      r: lerp(b.left.r, b.right.r, f),
+      g: lerp(b.left.g, b.right.g, f),
+      b: lerp(b.left.b, b.right.b, f),
+      a: lerp(b.left.a, b.right.a, f)
+    };
+  }
+
+  function evalStrobe(blocks, t) {
+    var picked = pickActiveBlock(blocks, t);
+    if (!picked) return null;
+    return lerp(picked.block.left, picked.block.right, picked.frac);
+  }
+
+  function evalRotate(blocks, t) {
+    var picked = pickActiveBlock(blocks, t);
+    if (!picked) return 0;
+    return lerp(picked.block.left, picked.block.right, picked.frac);
+  }
+
+  // A rapid on/off gate driven by a strobe "speed" value (0..1). Capped
+  // to stay legible rather than seizure-inducing, and never drops to
+  // full black — just a soft dip.
+  var MAX_STROBE_HZ = 6;
+  var STROBE_FLOOR = 0.2;
+  function strobeGate(strobeValue, elapsedMs) {
+    if (strobeValue === null) return 1;
+    var hz = clamp(strobeValue, 0, 1) * MAX_STROBE_HZ;
+    if (hz <= 0.05) return 1;
+    var period = 1000 / hz;
+    var phase = (elapsedMs % period) / period;
+    return phase < 0.5 ? 1 : STROBE_FLOOR;
+  }
+
+  // ---------------------------------------------------------------------
+  // Position / movement pattern approximation. `period_time` is real
+  // milliseconds, so it's driven off elapsed wall-clock time implied by
+  // the current beat + bpm (beat / bpm * 60 * 1000) — deterministic for
+  // both playback and scrubbing.
+  // ---------------------------------------------------------------------
+  function squarePath(phase) {
+    var seg = Math.floor(phase * 4) % 4;
+    var f = (phase * 4) % 1;
+    var v = f * 2 - 1;
+    if (seg === 0) return { nx: v, ny: -1 };
+    if (seg === 1) return { nx: 1, ny: v };
+    if (seg === 2) return { nx: -v, ny: 1 };
+    return { nx: -1, ny: -v };
+  }
+
+  function evalPosition(blocks, t, elapsedMs) {
+    var picked = pickActiveBlock(blocks, t);
+    if (!picked) return null;
+    var block = picked.block;
+    var period = Math.max(block.period_time || 1, 1);
+    var phase = (elapsedMs / period) % 1;
+    if (phase < 0) phase += 1;
+    if (block.type === "PingPong") {
+      var p2 = (elapsedMs / period) % 2;
+      if (p2 < 0) p2 += 2;
+      phase = p2 <= 1 ? p2 : 2 - p2;
+    }
+    if (block.direction === "Backward") phase = 1 - phase;
+    var angle = phase * Math.PI * 2;
+    var nx = 0, ny = 0;
+    switch (block.pattern) {
+      case "Line": nx = Math.sin(angle); ny = 0; break;
+      case "Line2": nx = 0; ny = Math.sin(angle); break;
+      case "Square": { var s = squarePath(phase); nx = s.nx; ny = s.ny; break; }
+      case "SquareChoppy": { var sc = squarePath(Math.floor(phase * 8) / 8); nx = sc.nx; ny = sc.ny; break; }
+      case "Diamond": {
+        var d = squarePath(phase);
+        nx = (d.nx - d.ny) * 0.7071;
+        ny = (d.nx + d.ny) * 0.7071;
+        break;
+      }
+      case "Lissajous": nx = Math.sin(angle * 3); ny = Math.sin(angle * 2 + Math.PI / 2); break;
+      case "Leaf": nx = Math.sin(angle); ny = Math.sin(angle) * Math.cos(angle); break;
+      case "Circle":
+      default: nx = Math.cos(angle); ny = Math.sin(angle); break;
+    }
+    // offset_x/offset_y are the DMX-space (0-255) centre of the path;
+    // width/height are the DMX-space extent, half on each side of centre —
+    // matches how these values read in real macro payloads (e.g.
+    // offset_x=170, width=40 sweeps DMX 150..190).
+    var offsetX = block.offset_x != null ? block.offset_x : 127.5;
+    var offsetY = block.offset_y != null ? block.offset_y : 127.5;
+    return {
+      panDmx: clamp(offsetX + nx * (block.width || 0) / 2, 0, 255),
+      tiltDmx: clamp(offsetY + ny * (block.height || 0) / 2, 0, 255)
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // DMX pan/tilt -> fraction of that axis's travel, centred on DMX 127.5
+  // ("straight ahead"). A degenerate (zero-width) limit range means the
+  // axis doesn't exist on the hardware at all — never collapse that to a
+  // fixed offset angle, just report no deflection.
+  // ---------------------------------------------------------------------
+  function axisFraction(dmxValue, limits) {
+    var lo = limits ? limits.min : 0, hi = limits ? limits.max : 255;
+    if (hi - lo < 1) return null; // no usable range: axis can't move
+    return clamp((clamp(dmxValue, lo, hi) - 127.5) / 127.5, -1, 1);
+  }
+
+  // The Super Storm1500B tilt block is real 6-channel TILT-ONLY hardware
+  // (physical-rig-profile skill: "no independent pan") — force zero pan
+  // deflection for that kind regardless of what pan_limits happens to
+  // say, since a macro's Position block was authored blind to whether
+  // it's driving pan-capable hardware.
+  function panFraction(dmxValue, limits, kind) {
+    if (kind === "tilt_block") return 0;
+    var frac = axisFraction(dmxValue, limits);
+    return frac === null ? 0 : frac;
+  }
+
+  function tiltFraction(dmxValue, limits, reversed) {
+    var frac = axisFraction(dmxValue, limits);
+    if (frac === null) return 0;
+    return reversed ? -frac : frac;
+  }
+
+  // ---------------------------------------------------------------------
+  // Beam vector: sideways + vertical + depth (toward/away from the
+  // audience) — two orthographic projections of ONE vector, not a 3D
+  // engine. Pan is the azimuth around the vertical axis: it drives BOTH
+  // the side-to-side sweep and the toward/away-from-audience motion
+  // (sin/cos of the pan angle), which is exactly what the real hardware
+  // does and why it naturally wraps past +/-180deg for a >360deg pan
+  // range (the LM70S's 540deg yoke). Tilt only ever affects how far
+  // down/up the beam points — the same "hangs down toward the crowd"
+  // bias used before this feature existed.
+  //
+  // Mounting rotation (already implemented) is a roll of the fixture
+  // housing around its own boresight/depth axis — e.g. a head bolted
+  // onto a 45-degree truss diagonal. A roll around the depth axis mixes
+  // sideways and vertical but leaves depth untouched, so it's applied
+  // only to that (sideways, vertical) pair, never to depth.
+  // ---------------------------------------------------------------------
+  function beamVector(panAngleRad, tiltFrac, rollRad) {
+    var sideways = Math.sin(panAngleRad);
+    var depth = Math.cos(panAngleRad); // +1 toward audience, -1 away, 0 across stage
+    var vertical = 0.55 + tiltFrac * 0.55;
+    var cos = Math.cos(rollRad), sin = Math.sin(rollRad);
+    var rx = sideways * cos - vertical * sin;
+    var ry = sideways * sin + vertical * cos;
+    var len = Math.hypot(rx, ry) || 1;
+    return {
+      x: rx / len, y: ry / len, // normalized front-view screen direction
+      sideways: rx,             // rotated, un-normalized — plan view's x axis
+      depth: depth               // -1..1, unaffected by mount roll
+    };
+  }
+
+  // Toward the audience: blend the beam toward a hot white core. Away
+  // from it: desaturate + push cool (blue) so "away" never reads as
+  // identical to "toward" even though both foreshorten to a short beam.
+  function applyDepthTreatment(colour, depth) {
+    var towardness = clamp(depth, 0, 1);
+    var awayness = clamp(-depth, 0, 1);
+    var r = lerp(colour.r, 255, towardness * 0.5);
+    var g = lerp(colour.g, 255, towardness * 0.5);
+    var b = lerp(colour.b, 255, towardness * 0.5);
+    var avg = (r + g + b) / 3;
+    r = lerp(r, avg * 0.7, awayness);
+    g = lerp(g, avg * 0.85, awayness);
+    b = lerp(b, Math.min(255, avg * 1.05 + 25), awayness);
+    return { r: r, g: g, b: b, a: colour.a };
+  }
+
+  // ---------------------------------------------------------------------
+  // Fixture precompute — sort blocks once, classify kind, keep static
+  // per-fixture metadata so the render loop only does math + canvas
+  // drawing, never JSON/array churn.
+  // ---------------------------------------------------------------------
+  function byXleft(a, b) { return a.xleft - b.xleft; }
+
+  var KIND_META = {
+    moving_head: { glyph: "▲", color: "#7fd4ff", label: "moving head" },
+    tilt_block: { glyph: "▬", color: "#c9a6ff", label: "tilt bar" },
+    bar_cell: { glyph: "▮", color: "#ffd27f", label: "bar cell" },
+    par: { glyph: "●", color: "#8fffb0", label: "par" },
+    effect: { glyph: "◆", color: "#ff9fd0", label: "effect" },
+    other: { glyph: "■", color: "#c7cbd4", label: "other" }
+  };
+
+  //: Hardware sweep defaults (physical-rig-profile skill) — rekordbox
+  //: doesn't record these, they're a per-fixture correction the user can
+  //: make in the layout panel (see panDegreesInput/tiltDegreesInput).
+  var DEFAULT_PAN_DEGREES = 540;
+  var DEFAULT_TILT_DEGREES = 270;
+
+  function limitsOf(raw) {
+    return {
+      min: (raw && typeof raw.min === "number") ? raw.min : 0,
+      max: (raw && typeof raw.max === "number") ? raw.max : 255
+    };
+  }
+
+  var fixtures = (RBXLIGHT_PAYLOAD.fixtures || []).map(function (f) {
+    var program = f.program || {};
+    return {
+      id: f.id,
+      label: f.label,
+      kind: KIND_META[f.kind] ? f.kind : "other",
+      x: f.x,
+      y: f.y,
+      rotation: normalizeDeg(typeof f.rotation === "number" ? f.rotation : 0),
+      slotName: f.slot_name,
+      brightness: program.brightness || null,
+      colour: (program.colour || []).slice().sort(byXleft),
+      strobe: (program.strobe || []).slice().sort(byXleft),
+      position: (program.position || []).slice().sort(byXleft),
+      rotate: (program.rotate || []).slice().sort(byXleft),
+      panLimits: limitsOf(f.pan_limits),
+      tiltLimits: limitsOf(f.tilt_limits),
+      tiltReversal: !!f.tilt_reversal,
+      panDegrees: typeof f.pan_degrees === "number" ? f.pan_degrees : DEFAULT_PAN_DEGREES,
+      tiltDegrees: typeof f.tilt_degrees === "number" ? f.tilt_degrees : DEFAULT_TILT_DEGREES
+    };
+  });
+
+  var fixturesById = {};
+  fixtures.forEach(function (f) { fixturesById[f.id] = f; });
+
+  // Snapshot of the layout exactly as generated/loaded, so an in-browser
+  // experiment (drag, rotate, sweep edit) is never a one-way door —
+  // "Reset layout" restores this.
+  var generatedSnapshot = fixtures.map(function (f) {
+    return {
+      id: f.id, x: f.x, y: f.y, rotation: f.rotation,
+      panDegrees: f.panDegrees, tiltDegrees: f.tiltDegrees
+    };
+  });
+
+  // ---------------------------------------------------------------------
+  // Truss: the real 5-segment arch outline, in the venue's normalized
+  // layout space, drawn as understated scaffolding behind the fixtures.
+  //
+  // The payload's truss polyline is normalized against the arch's OWN
+  // bounding box, while fixture x/y are normalized against a wider bbox
+  // that also includes the ground pars standing outside the arch
+  // footprint — two different horizontal scales. Left uncorrected, the
+  // arch would render wider than the bars actually sit. Recalibrate the
+  // truss's x-axis against the two bar (tilt_block) fixtures, which we
+  // know mount exactly on the left/right legs, so the drawn structure
+  // lines up with where the bars actually render. Computed once, from
+  // the layout as generated — dragging a fixture afterwards must not
+  // make the truss chase it.
+  // ---------------------------------------------------------------------
+  var truss = (RBXLIGHT_PAYLOAD.truss || []).map(function (p) {
+    return Array.isArray(p) ? { x: p[0], y: p[1] } : { x: p.x, y: p.y };
+  });
+
+  (function calibrateTrussX() {
+    if (truss.length === 0) return;
+    var txs = truss.map(function (p) { return p.x; });
+    var txMin = Math.min.apply(null, txs);
+    var txMax = Math.max.apply(null, txs);
+    if (txMax - txMin < 1e-6) return;
+    var bars = fixtures.filter(function (f) { return f.kind === "tilt_block"; });
+    if (bars.length < 2) return;
+    bars = bars.slice().sort(function (a, b) { return a.x - b.x; });
+    var leftX = bars[0].x, rightX = bars[bars.length - 1].x;
+    var scale = (rightX - leftX) / (txMax - txMin);
+    truss.forEach(function (p) { p.x = leftX + (p.x - txMin) * scale; });
+  })();
+
+  var totalBeats = Math.max(0, RBXLIGHT_PAYLOAD.macro && RBXLIGHT_PAYLOAD.macro.beats || 0);
+
+  // ---------------------------------------------------------------------
+  // DOM wiring
+  // ---------------------------------------------------------------------
+  document.getElementById("macroName").textContent =
+    (RBXLIGHT_PAYLOAD.macro && RBXLIGHT_PAYLOAD.macro.name) || "(untitled macro)";
+  document.getElementById("venueName").textContent =
+    (RBXLIGHT_PAYLOAD.venue && RBXLIGHT_PAYLOAD.venue.name) || "";
+
+  var legendEl = document.getElementById("legend");
+  var legendHint = legendEl.querySelector(".hint");
+  Object.keys(KIND_META).forEach(function (kind) {
+    var meta = KIND_META[kind];
+    var item = document.createElement("span");
+    item.className = "item";
+    item.innerHTML =
+      '<span class="swatch" style="color:' + meta.color + '">' + meta.glyph + "</span>" + meta.label;
+    legendEl.insertBefore(item, legendHint);
+  });
+
+  var playBtn = document.getElementById("playBtn");
+  var loopChk = document.getElementById("loopChk");
+  var bpmInput = document.getElementById("bpmInput");
+  var scrub = document.getElementById("scrub");
+  var beatReadout = document.getElementById("beatReadout");
+  var timeReadout = document.getElementById("timeReadout");
+  var emptyState = document.getElementById("emptyState");
+  var canvas = document.getElementById("stage");
+  var ctx = canvas.getContext("2d");
+  var stageWrap = document.getElementById("stage-wrap");
+  var planCanvas = document.getElementById("planStage");
+  var planCtx = planCanvas.getContext("2d");
+
+  var venueId = (RBXLIGHT_PAYLOAD.venue && RBXLIGHT_PAYLOAD.venue.id != null)
+    ? RBXLIGHT_PAYLOAD.venue.id : 0;
+
+  // Selected-fixture panel elements
+  var selEmpty = document.getElementById("selEmpty");
+  var selBody = document.getElementById("selBody");
+  var selLabel = document.getElementById("selLabel");
+  var selSlot = document.getElementById("selSlot");
+  var selKind = document.getElementById("selKind");
+  var rotationSlider = document.getElementById("rotationSlider");
+  var rotationReadout = document.getElementById("rotationReadout");
+  var panDegreesRow = document.getElementById("panDegreesRow");
+  var tiltDegreesRow = document.getElementById("tiltDegreesRow");
+  var panDegreesInput = document.getElementById("panDegreesInput");
+  var tiltDegreesInput = document.getElementById("tiltDegreesInput");
+
+  // Save/layout panel elements
+  var layoutPathEl = document.getElementById("layoutPath");
+  var layoutStatusEl = document.getElementById("layoutStatus");
+  var downloadLayoutBtn = document.getElementById("downloadLayoutBtn");
+  var copyLayoutBtn = document.getElementById("copyLayoutBtn");
+  var resetLayoutBtn = document.getElementById("resetLayoutBtn");
+  var jsonPreview = document.getElementById("jsonPreview");
+
+  layoutPathEl.textContent = "work/layouts/layout_venue_" + venueId + ".json";
+
+  var initialBpm = (RBXLIGHT_PAYLOAD.bpm && RBXLIGHT_PAYLOAD.bpm > 0) ? RBXLIGHT_PAYLOAD.bpm : 120;
+  bpmInput.value = initialBpm;
+
+  scrub.max = String(totalBeats);
+  scrub.step = totalBeats > 0 ? String(Math.max(totalBeats / 2000, 0.001)) : "1";
+
+  if (totalBeats <= 0) {
+    playBtn.disabled = true;
+    scrub.disabled = true;
+  }
+  if (fixtures.length === 0) {
+    emptyState.hidden = false;
+  }
+
+  var state = { beat: 0, bpm: initialBpm, playing: false, loop: true, lastTs: null };
+  var isScrubbing = false;
+
+  function updatePlayButton() {
+    playBtn.textContent = state.playing ? "⏸ Pause" : "▶ Play";
+    playBtn.setAttribute("aria-pressed", state.playing ? "true" : "false");
+  }
+
+  function formatTime(ms) {
+    var totalMs = Math.max(0, ms);
+    var totalSec = totalMs / 1000;
+    var mins = Math.floor(totalSec / 60);
+    var secs = totalSec - mins * 60;
+    return mins + ":" + (secs < 10 ? "0" : "") + secs.toFixed(1);
+  }
+
+  function elapsedMsForBeat(beat, bpm) {
+    return (beat / Math.max(bpm, 1)) * 60 * 1000;
+  }
+
+  function updateReadouts() {
+    var elapsedMs = elapsedMsForBeat(state.beat, state.bpm);
+    beatReadout.textContent = "beat " + state.beat.toFixed(2) + " / " + totalBeats;
+    timeReadout.textContent = formatTime(elapsedMs);
+    if (!isScrubbing) scrub.value = String(state.beat);
+  }
+
+  playBtn.addEventListener("click", function () {
+    if (totalBeats <= 0) return;
+    if (!state.playing && state.beat >= totalBeats) state.beat = 0; // replay from start
+    state.playing = !state.playing;
+    updatePlayButton();
+  });
+
+  loopChk.addEventListener("change", function () {
+    state.loop = loopChk.checked;
+  });
+
+  bpmInput.addEventListener("input", function () {
+    var v = parseFloat(bpmInput.value);
+    if (isFinite(v) && v > 0) state.bpm = v;
+  });
+
+  scrub.addEventListener("pointerdown", function () { isScrubbing = true; });
+  window.addEventListener("pointerup", function () { isScrubbing = false; });
+  scrub.addEventListener("input", function () {
+    state.beat = clamp(parseFloat(scrub.value) || 0, 0, totalBeats);
+    updateReadouts();
+    renderFrame(state.beat);
+  });
+
+  // ---------------------------------------------------------------------
+  // Selection + rotation panel wiring
+  // ---------------------------------------------------------------------
+  var selectedFixture = null;
+
+  function selectFixture(f) {
+    selectedFixture = f;
+    if (!f) {
+      selEmpty.hidden = false;
+      selBody.hidden = true;
+      return;
+    }
+    selEmpty.hidden = true;
+    selBody.hidden = false;
+    selLabel.textContent = f.label;
+    selSlot.textContent = f.slotName;
+    selKind.textContent = (KIND_META[f.kind] || KIND_META.other).label;
+    syncRotationUi();
+    syncSweepUi();
+  }
+
+  function syncRotationUi() {
+    if (!selectedFixture) return;
+    rotationSlider.value = String(Math.round(selectedFixture.rotation));
+    rotationReadout.textContent = Math.round(selectedFixture.rotation) + "\u00B0";
+  }
+
+  // Pan/tilt sweep is only meaningful for fixtures that actually pan or
+  // tilt — hidden for pars/bar cells/effects rather than shown as an
+  // editable field that does nothing for them.
+  function syncSweepUi() {
+    if (!selectedFixture) return;
+    var showSweep = selectedFixture.kind === "moving_head" || selectedFixture.kind === "tilt_block";
+    panDegreesRow.hidden = !showSweep;
+    tiltDegreesRow.hidden = !showSweep;
+    if (showSweep) {
+      panDegreesInput.value = String(selectedFixture.panDegrees);
+      tiltDegreesInput.value = String(selectedFixture.tiltDegrees);
+    }
+  }
+
+  rotationSlider.addEventListener("input", function () {
+    if (!selectedFixture) return;
+    var v = parseFloat(rotationSlider.value);
+    if (!isFinite(v)) return;
+    selectedFixture.rotation = normalizeDeg(v);
+    rotationReadout.textContent = Math.round(selectedFixture.rotation) + "\u00B0";
+  });
+
+  panDegreesInput.addEventListener("input", function () {
+    if (!selectedFixture) return;
+    var v = parseFloat(panDegreesInput.value);
+    if (isFinite(v) && v >= 0) selectedFixture.panDegrees = v;
+  });
+
+  tiltDegreesInput.addEventListener("input", function () {
+    if (!selectedFixture) return;
+    var v = parseFloat(tiltDegreesInput.value);
+    if (isFinite(v) && v >= 0) selectedFixture.tiltDegrees = v;
+  });
+
+  // ---------------------------------------------------------------------
+  // Save-layout wiring — same JSON shape rbxlight.preview.layout reads:
+  // {venue_id, entries: [{fixture_id, x, y, label, kind, rotation,
+  // pan_degrees, tilt_degrees}, ...]}
+  // ---------------------------------------------------------------------
+  function currentLayoutObject() {
+    return {
+      venue_id: venueId,
+      entries: fixtures.map(function (f) {
+        return {
+          fixture_id: f.id,
+          x: f.x,
+          y: f.y,
+          label: f.label,
+          kind: f.kind,
+          rotation: normalizeDeg(f.rotation),
+          pan_degrees: f.panDegrees,
+          tilt_degrees: f.tiltDegrees
+        };
+      })
+    };
+  }
+
+  var statusTimer = null;
+  function showLayoutStatus(message, isError) {
+    layoutStatusEl.textContent = message;
+    layoutStatusEl.className = isError ? "error" : "";
+    if (statusTimer) clearTimeout(statusTimer);
+    statusTimer = setTimeout(function () { layoutStatusEl.textContent = ""; }, 6000);
+  }
+
+  downloadLayoutBtn.addEventListener("click", function () {
+    var json = JSON.stringify(currentLayoutObject(), null, 2);
+    var blob = new Blob([json], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "layout_venue_" + venueId + ".json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showLayoutStatus("Downloaded. Move it to " + layoutPathEl.textContent + ".");
+  });
+
+  function fallbackCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  copyLayoutBtn.addEventListener("click", function () {
+    var json = JSON.stringify(currentLayoutObject(), null, 2);
+    jsonPreview.value = json;
+    function onFail() {
+      var ok = fallbackCopy(json);
+      jsonPreview.hidden = false;
+      if (ok) {
+        showLayoutStatus("Copied to clipboard.");
+      } else {
+        showLayoutStatus("Couldn't access the clipboard — JSON is below, select and copy manually.", true);
+      }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(
+        function () { jsonPreview.hidden = true; showLayoutStatus("Copied to clipboard."); },
+        onFail
+      );
+    } else {
+      onFail();
+    }
+  });
+
+  resetLayoutBtn.addEventListener("click", function () {
+    generatedSnapshot.forEach(function (snap) {
+      var f = fixturesById[snap.id];
+      if (!f) return;
+      f.x = snap.x;
+      f.y = snap.y;
+      f.rotation = snap.rotation;
+      f.panDegrees = snap.panDegrees;
+      f.tiltDegrees = snap.tiltDegrees;
+    });
+    if (selectedFixture) { syncRotationUi(); syncSweepUi(); }
+    showLayoutStatus("Layout reset to the generated positions.");
+  });
+
+  // ---------------------------------------------------------------------
+  // Canvas sizing
+  // ---------------------------------------------------------------------
+  var stageSize = { width: 0, height: 0 };
+  function resizeCanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    var rect = stageWrap.getBoundingClientRect();
+    stageSize.width = rect.width;
+    stageSize.height = rect.height;
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resizeCanvas();
+  window.addEventListener("resize", resizeCanvas);
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(resizeCanvas).observe(stageWrap);
+  }
+
+  // Secondary top-down plan canvas — its own (smaller) size state, sized
+  // off its own CSS box so it stays independent of the main stage.
+  var planSize = { width: 0, height: 0 };
+  function resizePlanCanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    var rect = planCanvas.getBoundingClientRect();
+    planSize.width = rect.width;
+    planSize.height = rect.height;
+    planCanvas.width = Math.max(1, Math.round(rect.width * dpr));
+    planCanvas.height = Math.max(1, Math.round(rect.height * dpr));
+    planCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  resizePlanCanvas();
+  window.addEventListener("resize", resizePlanCanvas);
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(resizePlanCanvas).observe(planCanvas);
+  }
+
+  var STAGE_PAD = 56;
+  function project(nx, ny) {
+    var w = stageSize.width, h = stageSize.height;
+    return {
+      x: STAGE_PAD + clamp(nx, 0, 1) * Math.max(1, w - 2 * STAGE_PAD),
+      y: STAGE_PAD + clamp(ny, 0, 1) * Math.max(1, h - 2 * STAGE_PAD)
+    };
+  }
+
+  function unproject(px, py) {
+    var w = stageSize.width, h = stageSize.height;
+    return {
+      x: clamp((px - STAGE_PAD) / Math.max(1, w - 2 * STAGE_PAD), 0, 1),
+      y: clamp((py - STAGE_PAD) / Math.max(1, h - 2 * STAGE_PAD), 0, 1)
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Pointer interaction: click to select, drag to reposition. Kept
+  // entirely separate from playback state — dragging never touches
+  // state.playing/state.beat, so it can't disturb playback.
+  // ---------------------------------------------------------------------
+  var HIT_RADIUS = 16;
+  var DRAG_THRESHOLD = 3;
+  var dragState = null;
+
+  function canvasPointerPos(evt) {
+    var rect = canvas.getBoundingClientRect();
+    return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+  }
+
+  function hitTestFixture(px, py) {
+    var best = null, bestDist = HIT_RADIUS;
+    for (var i = fixtures.length - 1; i >= 0; i--) {
+      var f = fixtures[i];
+      var pt = project(f.x, f.y);
+      var d = Math.hypot(pt.x - px, pt.y - py);
+      if (d <= bestDist) { bestDist = d; best = f; }
+    }
+    return best;
+  }
+
+  canvas.addEventListener("pointerdown", function (evt) {
+    var pos = canvasPointerPos(evt);
+    var hit = hitTestFixture(pos.x, pos.y);
+    canvas.focus();
+    if (!hit) {
+      selectFixture(null);
+      return;
+    }
+    canvas.setPointerCapture(evt.pointerId);
+    dragState = { fixture: hit, pointerId: evt.pointerId, moved: false, startX: pos.x, startY: pos.y };
+    canvas.style.cursor = "grabbing";
+    evt.preventDefault();
+  });
+
+  canvas.addEventListener("pointermove", function (evt) {
+    if (dragState && dragState.pointerId === evt.pointerId) {
+      var pos = canvasPointerPos(evt);
+      var dx = pos.x - dragState.startX, dy = pos.y - dragState.startY;
+      if (!dragState.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) dragState.moved = true;
+      if (dragState.moved) {
+        var norm = unproject(pos.x, pos.y);
+        dragState.fixture.x = norm.x;
+        dragState.fixture.y = norm.y;
+        if (selectedFixture !== dragState.fixture) selectFixture(dragState.fixture);
+      }
+      return;
+    }
+    var hoverPos = canvasPointerPos(evt);
+    canvas.style.cursor = hitTestFixture(hoverPos.x, hoverPos.y) ? "grab" : "default";
+  });
+
+  function endDrag(evt) {
+    if (!dragState || dragState.pointerId !== evt.pointerId) return;
+    if (!dragState.moved) {
+      selectFixture(dragState.fixture);
+    }
+    canvas.style.cursor = "grab";
+    dragState = null;
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  // Keyboard equivalent to dragging: nudge position with arrow keys,
+  // rotate with [ / ], once a fixture is selected.
+  canvas.addEventListener("keydown", function (evt) {
+    if (!selectedFixture) return;
+    var step = evt.shiftKey ? 0.03 : 0.01;
+    var handled = true;
+    switch (evt.key) {
+      case "ArrowUp": selectedFixture.y = clamp(selectedFixture.y - step, 0, 1); break;
+      case "ArrowDown": selectedFixture.y = clamp(selectedFixture.y + step, 0, 1); break;
+      case "ArrowLeft": selectedFixture.x = clamp(selectedFixture.x - step, 0, 1); break;
+      case "ArrowRight": selectedFixture.x = clamp(selectedFixture.x + step, 0, 1); break;
+      case "[":
+        selectedFixture.rotation = normalizeDeg(selectedFixture.rotation - (evt.shiftKey ? 15 : 5));
+        syncRotationUi();
+        break;
+      case "]":
+        selectedFixture.rotation = normalizeDeg(selectedFixture.rotation + (evt.shiftKey ? 15 : 5));
+        syncRotationUi();
+        break;
+      case "Escape": selectFixture(null); break;
+      default: handled = false;
+    }
+    if (handled) evt.preventDefault();
+  });
+
+  // ---------------------------------------------------------------------
+  // Drawing
+  // ---------------------------------------------------------------------
+  function drawTruss(points) {
+    if (!points || points.length < 2) return;
+    var pts = points.map(function (p) { return project(p.x, p.y); });
+    var RAIL_OFFSET = 5;
+
+    function rail(sign) {
+      var out = [];
+      for (var i = 0; i < pts.length; i++) {
+        var prev = pts[i - 1] || pts[i];
+        var next = pts[i + 1] || pts[i];
+        var dx = next.x - prev.x, dy = next.y - prev.y;
+        var len = Math.hypot(dx, dy) || 1;
+        var nx = -dy / len, ny = dx / len;
+        out.push({ x: pts[i].x + nx * RAIL_OFFSET * sign, y: pts[i].y + ny * RAIL_OFFSET * sign });
+      }
+      return out;
+    }
+
+    var railA = rail(1), railB = rail(-1);
+
+    ctx.save();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.lineWidth = 1.5;
+    [railA, railB].forEach(function (r) {
+      ctx.beginPath();
+      ctx.moveTo(r[0].x, r[0].y);
+      for (var i = 1; i < r.length; i++) ctx.lineTo(r[i].x, r[i].y);
+      ctx.stroke();
+    });
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 1;
+    for (var i = 0; i < pts.length; i++) {
+      ctx.beginPath();
+      ctx.moveTo(railA[i].x, railA[i].y);
+      ctx.lineTo(railB[i].x, railB[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBackground() {
+    var w = stageSize.width, h = stageSize.height;
+    var grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, "#0c0e14");
+    grad.addColorStop(1, "#050609");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    drawTruss(truss);
+
+    // stage floor suggestion
+    var floorGrad = ctx.createRadialGradient(
+      w / 2, h + 40, 10, w / 2, h + 40, Math.max(w, h)
+    );
+    floorGrad.addColorStop(0, "rgba(255,255,255,0.05)");
+    floorGrad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(0, h - 90, w, 90);
+  }
+
+  function rgba(c, alpha) {
+    return "rgba(" + Math.round(c.r) + "," + Math.round(c.g) + "," + Math.round(c.b) + "," + clamp(alpha, 0, 1) + ")";
+  }
+
+  function drawGlow(x, y, radius, color, intensity) {
+    if (intensity <= 0.01 || radius <= 0) return;
+    var grad = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    grad.addColorStop(0, rgba(color, intensity));
+    grad.addColorStop(1, rgba(color, 0));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBeam(x, y, dir, length, halfWidth, color, intensity) {
+    if (intensity <= 0.01) return;
+    var ex = x + dir.x * length;
+    var ey = y + dir.y * length;
+    var perp = { x: -dir.y, y: dir.x };
+    var x1 = x + perp.x * 4, y1 = y + perp.y * 4;
+    var x2 = x - perp.x * 4, y2 = y - perp.y * 4;
+    var ex1 = ex + perp.x * halfWidth, ey1 = ey + perp.y * halfWidth;
+    var ex2 = ex - perp.x * halfWidth, ey2 = ey - perp.y * halfWidth;
+    var grad = ctx.createLinearGradient(x, y, ex, ey);
+    grad.addColorStop(0, rgba(color, intensity * 0.85));
+    grad.addColorStop(1, rgba(color, 0));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(ex1, ey1);
+    ctx.lineTo(ex2, ey2);
+    ctx.lineTo(x2, y2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // A persistent, low-key facing indicator, drawn even when the fixture
+  // is dark — the two 45-degree diagonal-mounted moving heads must read
+  // as angled whether or not they're currently lit.
+  function drawAimIndicator(x, y, dir, housingR, off, kindColor) {
+    var len = housingR + 14;
+    ctx.save();
+    ctx.strokeStyle = off ? "rgba(255,255,255,0.25)" : kindColor;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + dir.x * housingR, y + dir.y * housingR);
+    ctx.lineTo(x + dir.x * len, y + dir.y * len);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawHousing(x, y, r, active, kindColor) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = active ? "#20232c" : "#15161c";
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = active ? kindColor : "rgba(255,255,255,0.15)";
+    ctx.stroke();
+  }
+
+  // Generic rotated-rectangle fixture graphic (bar cells, unclassified
+  // "other" fixtures) — rotated by the fixture's physical mounting
+  // rotation so "honour rotation" applies to every kind, not just
+  // moving heads, even though the rig currently only rotates heads.
+  function drawRotatedRect(x, y, rotRad, w, h, off, colour, kindColor, intensity) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotRad);
+    ctx.fillStyle = off ? "#15161c" : rgba(colour, clamp(0.25 + intensity * 0.75, 0, 1));
+    ctx.strokeStyle = off ? "rgba(255,255,255,0.12)" : kindColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.rect(-w / 2, -h / 2, w, h);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawRotatedDiamond(x, y, rotRad, off, colour, kindColor, intensity) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(rotRad);
+    ctx.fillStyle = off ? "#15161c" : rgba(colour, clamp(0.3 + intensity * 0.7, 0, 1));
+    ctx.strokeStyle = off ? "rgba(255,255,255,0.12)" : kindColor;
+    ctx.beginPath();
+    ctx.moveTo(0, -9); ctx.lineTo(9, 0); ctx.lineTo(0, 9); ctx.lineTo(-9, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawSelectionRing(x, y) {
+    ctx.save();
+    ctx.strokeStyle = "#5ad1ff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.arc(x, y, 18, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawLabel(x, y, label, slotName, dim) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = dim ? "rgba(232,232,236,0.35)" : "rgba(232,232,236,0.9)";
+    ctx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillText(label, x, y);
+    ctx.fillStyle = dim ? "rgba(154,160,172,0.3)" : "rgba(154,160,172,0.85)";
+    ctx.font = "10px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillText(slotName, x, y + 12);
+  }
+
+  // ---------------------------------------------------------------------
+  // Top-down plan view — smaller, quieter, secondary to the front
+  // elevation. Uses the SAME per-frame numbers the front view just
+  // computed (passed in via `planCache`), so the two views can never
+  // drift out of sync with each other.
+  //
+  // Plan-canvas convention: x is the same normalized sideways position
+  // used by the front view (fixtures physically sit in one shared
+  // horizontal frame); the arch/truss is coplanar (a fixed depth from
+  // the audience), so its top-down projection is correctly a straight
+  // row — drawn at PLAN_ARCH_ROW. The audience is toward larger y
+  // (labelled at the bottom); beams extend down toward the audience
+  // edge when depth > 0, and up past the truss row when depth < 0
+  // (aimed away, e.g. at a backdrop).
+  // ---------------------------------------------------------------------
+  var PLAN_PAD = 10;
+  var PLAN_ARCH_ROW = 0.3;
+
+  function planProjectX(nx) {
+    return PLAN_PAD + clamp(nx, 0, 1) * Math.max(1, planSize.width - 2 * PLAN_PAD);
+  }
+
+  function planArchRowY() {
+    return PLAN_PAD + PLAN_ARCH_ROW * Math.max(1, planSize.height - 2 * PLAN_PAD);
+  }
+
+  function drawPlanArch() {
+    if (truss.length < 2) return;
+    var y = planArchRowY();
+    planCtx.save();
+    planCtx.strokeStyle = "rgba(255,255,255,0.2)";
+    planCtx.lineWidth = 1.5;
+    planCtx.beginPath();
+    truss.forEach(function (p, i) {
+      var x = planProjectX(p.x);
+      if (i === 0) planCtx.moveTo(x, y); else planCtx.lineTo(x, y);
+    });
+    planCtx.stroke();
+    planCtx.restore();
+  }
+
+  function drawPlanView(planCache) {
+    var w = planSize.width, h = planSize.height;
+    planCtx.clearRect(0, 0, w, h);
+    var grad = planCtx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, "rgba(255,255,255,0.03)");
+    grad.addColorStop(1, "rgba(0,0,0,0.06)");
+    planCtx.fillStyle = grad;
+    planCtx.fillRect(0, 0, w, h);
+    drawPlanArch();
+
+    planCtx.save();
+    planCtx.fillStyle = "rgba(154,160,172,0.55)";
+    planCtx.font = "9px -apple-system, BlinkMacSystemFont, sans-serif";
+    planCtx.textAlign = "center";
+    planCtx.fillText("audience \u2193", w / 2, h - 4);
+    planCtx.restore();
+
+    if (!planCache || planCache.length === 0) return;
+
+    var y0 = planArchRowY();
+    var depthScale = Math.max(1, h - 2 * PLAN_PAD) * 0.6;
+    var sidewaysScale = Math.max(1, w) * 0.14;
+
+    planCache.forEach(function (entry) {
+      var x0 = planProjectX(entry.x);
+      var meta = KIND_META[entry.kind] || KIND_META.other;
+
+      if (entry.hasBeam) {
+        var ex = x0 + entry.sideways * sidewaysScale;
+        var ey = y0 + entry.depth * depthScale;
+        planCtx.save();
+        planCtx.strokeStyle = entry.off
+          ? "rgba(255,255,255,0.12)"
+          : rgba(entry.colour, clamp(entry.intensity * 0.9 + 0.08, 0, 1));
+        planCtx.lineWidth = entry.off ? 1 : lerp(1.5, 3, clamp(entry.intensity, 0, 1));
+        planCtx.lineCap = "round";
+        planCtx.beginPath();
+        planCtx.moveTo(x0, y0);
+        planCtx.lineTo(ex, ey);
+        planCtx.stroke();
+        planCtx.restore();
+      }
+
+      planCtx.beginPath();
+      planCtx.arc(x0, y0, entry.hasBeam ? 3.5 : 2.5, 0, Math.PI * 2);
+      planCtx.fillStyle = entry.off ? "rgba(255,255,255,0.25)" : meta.color;
+      planCtx.fill();
+    });
+  }
+
+  function renderFrame(beat) {
+    if (stageSize.width === 0) resizeCanvas();
+    if (planSize.width === 0) resizePlanCanvas();
+    drawBackground();
+    if (fixtures.length === 0) { drawPlanView([]); return; }
+
+    var elapsedMs = elapsedMsForBeat(beat, state.bpm);
+    var planCache = [];
+
+    for (var i = 0; i < fixtures.length; i++) {
+      var f = fixtures[i];
+      var meta = KIND_META[f.kind];
+      var pt = project(f.x, f.y);
+      var mountRotRad = (f.rotation || 0) * Math.PI / 180;
+
+      var brightness = f.brightness ? evalBrightnessPoints(f.brightness.points, beat) : 0;
+      var off = f.brightness === null;
+      var colour = evalColour(f.colour, beat) || { r: 255, g: 255, b: 255, a: 255 };
+      var strobeVal = evalStrobe(f.strobe, beat);
+      var gate = strobeGate(strobeVal, elapsedMs);
+      var intensity = off ? 0 : clamp(brightness, 0, 1) * gate * (colour.a / 255);
+      var rotateFrac = evalRotate(f.rotate, beat);
+
+      var planEntry = { x: f.x, kind: f.kind, off: off, colour: colour, intensity: intensity, hasBeam: false };
+
+      if (f.kind === "moving_head" || f.kind === "tilt_block") {
+        var posResult = f.position.length ? evalPosition(f.position, beat, elapsedMs) : null;
+        var panDmx = posResult ? posResult.panDmx : 127.5;
+        var tiltDmx = posResult ? posResult.tiltDmx : 127.5;
+        var panFrac = panFraction(panDmx, f.panLimits, f.kind);
+        var tiltFrac = tiltFraction(tiltDmx, f.tiltLimits, f.tiltReversal);
+        var panAngleRad = panFrac * f.panDegrees * Math.PI / 360;
+        var rollRad = mountRotRad + (rotateFrac || 0) * Math.PI * 2;
+        var vec = beamVector(panAngleRad, tiltFrac, rollRad);
+        var dir = { x: vec.x, y: vec.y };
+
+        // Depth drives foreshortening: toward the audience (depth -> 1)
+        // is short, wide and hot-cored; across the stage (depth -> 0) is
+        // long and narrow; away (depth -> -1) also foreshortens but
+        // reads dimmer/cooler instead, so it's never ambiguous with
+        // "toward".
+        var towardness = clamp(vec.depth, 0, 1);
+        var awayness = clamp(-vec.depth, 0, 1);
+        var lengthFrac = 1 - Math.abs(vec.depth);
+        var isTiltBlock = f.kind === "tilt_block";
+        var baseLen = Math.min(stageSize.width, stageSize.height) * (isTiltBlock ? 0.32 : 0.36);
+        var beamLen = lerp(baseLen * 0.45, baseLen, lengthFrac);
+        var baseHalfWidth = isTiltBlock ? 26 : 10;
+        var halfWidth = lerp(baseHalfWidth * 2.1, baseHalfWidth, lengthFrac);
+        var housingR = isTiltBlock ? 9 : 7;
+        var depthColour = applyDepthTreatment(colour, vec.depth);
+        var depthIntensity = intensity * lerp(1, 0.4, awayness);
+
+        drawBeam(pt.x, pt.y, dir, beamLen, halfWidth, depthColour, depthIntensity);
+        drawGlow(pt.x, pt.y, isTiltBlock ? 20 : 14, depthColour, depthIntensity * 0.9 + 0.05);
+        if (towardness > 0.1) {
+          drawGlow(pt.x, pt.y, housingR * (1.4 + towardness), { r: 255, g: 255, b: 255 }, towardness * intensity * 0.55);
+        }
+        drawHousing(pt.x, pt.y, housingR, !off, meta.color);
+        drawAimIndicator(pt.x, pt.y, dir, housingR, off, meta.color);
+
+        planEntry.hasBeam = true;
+        planEntry.sideways = vec.sideways;
+        planEntry.depth = vec.depth;
+        planEntry.colour = depthColour;
+        planEntry.intensity = depthIntensity;
+      } else if (f.kind === "par") {
+        drawGlow(pt.x, pt.y, 34, colour, intensity);
+        drawHousing(pt.x, pt.y, 8, !off, meta.color);
+      } else if (f.kind === "bar_cell") {
+        drawGlow(pt.x, pt.y, 16, colour, intensity * 0.8);
+        drawRotatedRect(pt.x, pt.y, mountRotRad, 10, 16, off, colour, meta.color, intensity);
+      } else if (f.kind === "effect") {
+        drawGlow(pt.x, pt.y, 22, colour, intensity);
+        drawRotatedDiamond(pt.x, pt.y, mountRotRad + rotateFrac * Math.PI * 2, off, colour, meta.color, intensity);
+      } else {
+        drawGlow(pt.x, pt.y, 18, colour, intensity * 0.7);
+        drawRotatedRect(pt.x, pt.y, mountRotRad, 14, 14, off, colour, meta.color, intensity);
+      }
+
+      drawLabel(pt.x, pt.y + 24, f.label, f.slotName, off);
+      planCache.push(planEntry);
+    }
+
+    if (selectedFixture) {
+      var spt = project(selectedFixture.x, selectedFixture.y);
+      drawSelectionRing(spt.x, spt.y);
+    }
+
+    drawPlanView(planCache);
+  }
+
+  // ---------------------------------------------------------------------
+  // Playback loop
+  // ---------------------------------------------------------------------
+  function tick(ts) {
+    var dt = state.lastTs != null ? ts - state.lastTs : 0;
+    state.lastTs = ts;
+
+    if (state.playing && !isScrubbing && totalBeats > 0) {
+      var beatsPerMs = state.bpm / 60000;
+      state.beat += dt * beatsPerMs;
+      if (state.beat >= totalBeats) {
+        if (state.loop) {
+          state.beat = state.beat % totalBeats;
+        } else {
+          state.beat = totalBeats;
+          state.playing = false;
+          updatePlayButton();
+        }
+      }
+    }
+
+    updateReadouts();
+    renderFrame(state.beat);
+    requestAnimationFrame(tick);
+  }
+
+  updatePlayButton();
+  updateReadouts();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

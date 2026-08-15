@@ -1,0 +1,29 @@
+[tools]
+python = "3.12"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.install]
+description = "Install project + dev dependencies"
+run = 'pip install -e ".[dev]"'
+
+[tasks.test]
+description = "Run pytest"
+run = "pytest"
+
+[tasks.lint]
+description = "Run ruff check"
+run = "ruff check ."
+
+[tasks.format]
+description = "Run ruff format"
+run = "ruff format ."
+
+[tasks.types]
+description = "Run mypy"
+run = "mypy src/"
+
+[tasks.check]
+description = "Run lint + types + test"
+depends = ["lint", "types", "test"]

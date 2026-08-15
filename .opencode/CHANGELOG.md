@@ -1,0 +1,8 @@
+# rekordbox-lighting Changelog
+
+| Date | Epic | Feature | Summary |
+|------|------|---------|---------|
+| 2026-08-15 | USER_CHANGE_REQUEST | Public-repo prep | `.gitignore` (DBs, `work/`, `backups/`, previews, caches) + `mise.toml` pinning Python 3.12 with `install/test/lint/format/types/check` tasks. Scrubbed identity for public release: name removed, absolute paths dropped, `xclusive-rig-profile` skill renamed `physical-rig-profile`, docs moved `.opencode/docs/` → `docs/` and rewritten first-person. Venue fixtures anonymized to a synthetic `TestVenue` with structure preserved. Factory `fixture_master_id`s kept — model catalog IDs, identical on every install. 427 tests. |
+| 2026-08-14 | USER_CHANGE_REQUEST | Arch-accurate rig layout | Replaced grid layout with the real 5-segment truss geometry, per-fixture rotation, drag-to-reposition + save in the visualizer, atomic layout saves. Fixed bar-cell grouping to key off DMX address (found by running a real preview, not by the suite). 421 tests. |
+| 2026-08-14 | USER_CHANGE_REQUEST | M1.5 — Offline macro visualizer | Self-contained HTML preview of a macro animated across the physical rig, zero external refs, works offline. Venue repo, editable rig layout, preview payload + `rbxlight preview`. 371 tests. Removed TDD stubs that made results environment-dependent. |
+| 2026-08-14 | USER_CHANGE_REQUEST | M1 — Safety layer, sync, macro round-trip | Backup/guard/restore, working-copy pull/push with sha256 stale-write protection, LightingEditModel XML parse/serialize, macro repo + YAML + pure generators. 254 tests. Verified live: externally-written macros appear in rekordbox. [Details](./completed/20260814-USER_CHANGE_REQUEST-m1-safety-and-macro-roundtrip.md) |

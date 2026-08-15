@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<LightingEditModel ver="1.0">
+  <Brightness>
+    <PointBlock xleft="0" xright="32">
+      <Point x="0" y="1" type="1"/>
+      <Point x="32" y="1" type="3"/>
+    </PointBlock>
+  </Brightness>
+  <Colour>
+    <ColourBlock xleft="0" colourleft="-65536" xright="32" colourright="-65536"/>
+  </Colour>
+  <Strobe>
+    <StrobeBlock xleft="0" strobeleft="0.7" xright="32" stroberight="0.7"/>
+  </Strobe>
+  <Position>
+    <MovementBlock xleft="0" xright="32" pattern="Line" width="40" height="0" offset_x="170"
+                   offset_y="20" round_angle="0" offset_angle="0" period_time="8000"
+                   frequency_x="2" frequency_y="3" phase_x="90" phase_y="0" type="Loop" relative="0"
+                   direction="Forward"/>
+  </Position>
+</LightingEditModel>

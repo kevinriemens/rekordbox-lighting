@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<LightingEditModel ver="1.0">
+  <Brightness>
+    <PointBlock xleft="0" xright="32">
+      <Point x="0" y="0" type="1"/>
+      <Point x="0" y="0" type="2"/>
+      <Point x="1" y="0" type="2"/>
+      <Point x="7.9893190921228303" y="1" type="2"/>
+      <Point x="10.018691588785046" y="1" type="2"/>
+      <Point x="10.958611481975968" y="0" type="2"/>
+      <Point x="11.983333333333333" y="0" type="2"/>
+      <Point x="18.947930574098798" y="1" type="2"/>
+      <Point x="20.977303070761018" y="1" type="2"/>
+      <Point x="21.959946595460615" y="0" type="2"/>
+      <Point x="21.959946595460615" y="0" type="2"/>
+      <Point x="23" y="0" type="2"/>
+      <Point x="29.949265687583448" y="0.97333333333333338" type="2"/>
+      <Point x="30.999999999999996" y="1" type="2"/>
+      <Point x="31.983333333333334" y="0" type="2"/>
+      <Point x="32" y="0" type="3"/>
+    </PointBlock>
+  </Brightness>
+  <Colour>
+    <ColourBlock xleft="0" colourleft="-16776961" xright="32" colourright="-16776961"/>
+  </Colour>
+  <Strobe/>
+  <Position>
+    <MovementBlock xleft="0.015820312500000003" xright="0.99667968750000036" pattern="Circle"
+                   width="0" height="0" offset_x="85" offset_y="120" round_angle="0"
+                   offset_angle="0" period_time="20000" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="Loop" direction="Forward"/>
+    <MovementBlock xleft="1.0441406250000003" xright="10.916015625" pattern="Line2"
+                   width="0" height="80" offset_x="85" offset_y="179" round_angle="0"
+                   offset_angle="0" period_time="5000" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="SingleShot" direction="Forward"/>
+    <MovementBlock xleft="10.979296875000001" xright="11.960156250000002" pattern="Circle"
+                   width="0" height="0" offset_x="85" offset_y="120" round_angle="0"
+                   offset_angle="0" period_time="20000" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="Loop" direction="Forward"/>
+    <MovementBlock xleft="12.007617187500003" xright="21.879492187500002" pattern="Line2"
+                   width="0" height="80" offset_x="85" offset_y="179" round_angle="0"
+                   offset_angle="0" period_time="5000" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="SingleShot" direction="Forward"/>
+    <MovementBlock xleft="21.990234375" xright="22.971093750000001" pattern="Circle"
+                   width="0" height="0" offset_x="85" offset_y="120" round_angle="0"
+                   offset_angle="0" period_time="20000" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="Loop" direction="Forward"/>
+    <MovementBlock xleft="23.018554687500004" xright="31.983333333333334" pattern="Line2"
+                   width="0" height="80" offset_x="85" offset_y="179" round_angle="0"
+                   offset_angle="0" period_time="4500" frequency_x="2" frequency_y="3"
+                   phase_x="90" phase_y="0" type="SingleShot" direction="Forward"/>
+  </Position>
+  <Rotate/>
+</LightingEditModel>
