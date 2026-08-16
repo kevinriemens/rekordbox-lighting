@@ -41,6 +41,12 @@ Raw ideas and future work. Items here need refinement before development.
   rekordbox writes 2-space-indented `LightingEditModel` payloads; ours are compact single-line.
   rekordbox accepts both — verified live — so this is purely for humans diffing YAML/XML exports.
 
+- [ ] **CLI commands** 
+  In the ReadMe there's a section on Finding. Shouldn't those be CLI commands?
+
+- [ ] **TUI**
+  I think this CLI will benefit from a small TUI, like `mole` (https://github.com/tw93/mole) for example. It's like an interactive menu so you can make better use of the CLI from a UI perspective.
+
 ---
 
 ## Epic: Multi-venue support (makes the tool reusable beyond this rig)
