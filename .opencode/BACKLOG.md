@@ -38,30 +38,33 @@ Raw ideas and future work. Items here need refinement before development.
 
 ## Epic: Multi-venue support (makes the tool reusable beyond this rig)
 
+**REFINED 2026-08-15 → three stories in `.opencode/refined/`.** Build in order:
+
+1. ~~`MULTI_VENUE-venue-discovery-and-selection` (S)~~ — **BUILT 2026-08-15.** Shipped as more than
+   discovery: `layout regenerate` turned out to never validate the venue at all, so a bad or stale
+   `--venue` silently exited 0. Both venue-aware commands now share one resolver.
+2. `MULTI_VENUE-per-venue-stage-description` (L) — truss geometry becomes persisted per-venue data
+   in cm; fixture auto-placement stops assuming the arch shape.
+3. `MULTI_VENUE-truss-editing-in-visualizer` (M) — draw/edit truss as a polyline, plus a CLI install
+   command that ends the download→manually-move-the-file chore. Depends on 2.
+
+Decisions taken during refinement: auto-placement stays (generic, along the truss run) rather than
+hand-placing 27 fixtures; truss is stored in **cm**, not normalized, so rig scale survives; truss is
+a **polyline of vertices**, not discrete truss pieces; the existing arch becomes the default shape,
+not a law. Split into three because they share a data model but not a review surface — 2 is Python +
+schema migration, 3 is vanilla-JS canvas work.
+
+Findings that shrank the epic: layout files were already per-venue by construction, and macros are
+venue-agnostic (they address the 25 fixed slots, not a venue's physical patch) so macro generation
+needed no work at all. The real hardcode was never the four arch constants — it was the placement
+algorithm assuming "two verticals, two diagonals and a top".
+
 ### Items
 
-- [ ] **Switch between venues and read the hardware from the selected venue**
-  The tool currently assumes the active venue (`ExecVenueId`, venue 2). It should let the user choose
-  any venue, read that venue's fixture patch as the source of truth, and drive everything —
-  preview, layout, macro generation — from it. I already have two venues describing the same
-  physical rig (`FullArcCustomBars` and `FullArc2`) and switch between them deliberately.
-
-- [ ] **Per-venue saved light positions**
-  Layout files are already keyed per venue (`layout_venue_<id>.json`), but the workflow around them is
-  not — switching venues should load that venue's saved positions automatically, and saving should
-  never leak positions across venues. Needs to survive a venue being added or renamed.
-
-- [ ] **User-definable truss geometry**
-  The arch is currently hardcoded as 5 segments (150cm vertical, 100cm 45° up, 100cm horizontal,
-  100cm 45° down, 150cm vertical) derived from my rig. To be reusable this must become data:
-  the user adds, moves, resizes and deletes truss pieces in the visualizer and saves them per venue,
-  the same way fixtures are dragged today. The generated default becomes a starting point, not a law.
-
-- [ ] **Reusability goal (parent of the three above)**
-  Together these make the tool work for ANY rig, not just this arch: pick a venue → read its patched
-  fixtures → draw/adjust its truss → position its lights → preview and generate macros against it.
-  Worth refining as one epic rather than three isolated stories, since they share the same data model
-  (a per-venue "stage description" holding both truss geometry and fixture placement).
+- [x] ~~Switch between venues and read the hardware from the selected venue~~ → story 1
+- [x] ~~Per-venue saved light positions~~ → story 2 (largely already true; folded in)
+- [x] ~~User-definable truss geometry~~ → stories 2 + 3
+- [x] ~~Reusability goal (parent of the three above)~~ → the three stories above
 
 ---
 

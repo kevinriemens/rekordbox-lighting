@@ -32,6 +32,9 @@ app.add_typer(macro_app, name="macro")
 layout_app = typer.Typer(help="Rig layout description commands")
 app.add_typer(layout_app, name="layout")
 
+venue_app = typer.Typer(help="Venue discovery commands")
+app.add_typer(venue_app, name="venue")
+
 _MACRO_DB_NAME = "macro.db3"
 _USER_DB_NAME = "user.db3"
 
@@ -53,22 +56,102 @@ def _working_copy_write(db_name: str) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _require_working_copy(path: Path) -> None:
+    """Guard shared by every venue-aware/working-copy-reading command.
+
+    Raises a clean typer.Exit pointing the user at `pull` instead of
+    letting a missing working copy surface as a raw sqlite driver error.
+    """
+    if not path.exists():
+        typer.echo(f"Working copy not found at {path}. Run `rbxlight pull` first.")
+        raise typer.Exit(code=1)
+
+
+@contextmanager
+def _readonly_working_copy(db_name: str) -> Iterator[sqlite3.Connection]:
+    """Resolve db_name in the working copy, require it exists, open it
+    read-only, and guarantee close. Shared by every read-only
+    working-copy command (`preview`, `layout regenerate`, `venue list`).
+    """
+    path = db.resolve_path(db_name)
+    _require_working_copy(path)
+    conn = db.connect_readonly(path)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _announce_venue_selection(venue: venues_repo.Venue, source: str) -> None:
+    typer.echo(f"Venue: {venue.id} ({venue.name}) — selected via {source}.")
+
+
+def _format_venue_line(
+    entry: venues_repo.VenueWithFixtureCount, *, active_id: int | None = None
+) -> str:
+    marker = " (active)" if entry.venue.id == active_id else ""
+    return f"  {entry.venue.id}: {entry.venue.name} ({entry.fixture_count} fixture(s)){marker}"
+
+
+def _venue_listing_text(user_conn: sqlite3.Connection) -> str:
+    """The "valid venues" enumeration shared by every venue-not-found /
+    stale-active-venue error message, built from the same repository
+    function `venue list` uses — so the two can never drift apart.
+    """
+    entries = venues_repo.list_venues_with_fixture_counts(user_conn)
+    if not entries:
+        return "  (no venues)"
+    return "\n".join(_format_venue_line(entry) for entry in entries)
+
+
 def _resolve_venue_and_fixtures(
     user_conn: sqlite3.Connection, venue: int | None
-) -> tuple[int, list[venues_repo.Fixture]]:
-    """Resolve venue (explicit, else the active lighting_property.ExecVenueId)
-    and list its patched fixtures. Exits with code 1 if neither is given.
+) -> tuple[venues_repo.Venue, list[venues_repo.Fixture], str]:
+    """Resolve + validate the venue (explicit id, else the active
+    lighting_property.ExecVenueId) and list its patched fixtures.
+
+    Returns (venue, fixtures, source) where source is "explicit" when
+    `venue` was given, else "active venue". Exits cleanly (code 1) when:
+    - no venue given and no active venue is set
+    - the active venue pointer is stale (points at a venue that no
+      longer exists)
+    - an explicit or active venue id does not exist
+    In every not-found case, the message enumerates the currently valid
+    venues so the user can retry immediately.
     """
-    venue_id = venue
-    if venue_id is None:
+    venue_id: int | None
+    if venue is not None:
+        venue_id = venue
+        source = "explicit"
+    else:
         venue_id = venues_repo.get_exec_venue_id(user_conn)
         if venue_id is None:
             typer.echo(
                 "No venue given and no active venue "
-                "(lighting_property.ExecVenueId) is set."
+                "(lighting_property.ExecVenueId) is set. Pass --venue to "
+                "select one explicitly."
             )
             raise typer.Exit(code=1)
-    return venue_id, venues_repo.list_fixtures(user_conn, venue_id)
+        source = "active venue"
+
+    try:
+        venue_obj = venues_repo.get_venue(user_conn, venue_id)
+    except LookupError:
+        listing = _venue_listing_text(user_conn)
+        if source == "explicit":
+            typer.echo(
+                f"Venue not found: no venue with id {venue_id}.\n"
+                f"Valid venues:\n{listing}"
+            )
+        else:
+            typer.echo(
+                f"Active venue (lighting_property.ExecVenueId={venue_id}) is "
+                f"stale — that venue no longer exists.\n"
+                f"Valid venues:\n{listing}"
+            )
+        raise typer.Exit(code=1) from None
+
+    return venue_obj, venues_repo.list_fixtures(user_conn, venue_id), source
 
 
 @macro_app.command("create")
@@ -152,21 +235,22 @@ def preview(
     """Render a self-contained HTML preview of a macro against a venue's
     fixture layout. Read-only, nothing to confirm; never touches live data.
     """
-    macro_path = db.resolve_path(_MACRO_DB_NAME)
-    user_path = db.resolve_path(_USER_DB_NAME)
-
-    macro_conn = db.connect_readonly(macro_path)
-    user_conn = db.connect_readonly(user_path)
     try:
-        venue_id, fixtures = _resolve_venue_and_fixtures(user_conn, venue)
-        layout_path = preview_layout.layout_path_for_venue(
-            venue_id, db.WORK_DIR / "layouts"
-        )
-        merge_result = preview_layout.ensure_layout(layout_path, venue_id, fixtures)
+        with (
+            _readonly_working_copy(_MACRO_DB_NAME) as macro_conn,
+            _readonly_working_copy(_USER_DB_NAME) as user_conn,
+        ):
+            venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
+            venue_id = venue_obj.id
+            _announce_venue_selection(venue_obj, source)
+            layout_path = preview_layout.layout_path_for_venue(
+                venue_id, db.WORK_DIR / "layouts"
+            )
+            merge_result = preview_layout.ensure_layout(layout_path, venue_id, fixtures)
 
-        result = preview_payload.build_preview_payload(
-            macro_conn, user_conn, macro_id, venue_id, merge_result.layout
-        )
+            result = preview_payload.build_preview_payload(
+                macro_conn, user_conn, macro_id, venue_id, merge_result.layout
+            )
     except preview_payload.MacroNotFoundError as exc:
         typer.echo(f"Macro not found: {exc}")
         raise typer.Exit(code=1) from exc
@@ -176,9 +260,6 @@ def preview(
     except preview_payload.MissingLayoutEntryError as exc:
         typer.echo(f"Layout incomplete: {exc}")
         raise typer.Exit(code=1) from exc
-    finally:
-        macro_conn.close()
-        user_conn.close()
 
     html = preview_document.render_preview_document(result)
 
@@ -335,12 +416,11 @@ def layout_regenerate(
     preserved for every fixture that still exists. Dry run by default —
     never writes the saved layout file unless --write is given.
     """
-    user_path = db.resolve_path(_USER_DB_NAME)
-    user_conn = db.connect_readonly(user_path)
-    try:
-        venue_id, fixtures = _resolve_venue_and_fixtures(user_conn, venue)
-    finally:
-        user_conn.close()
+    with _readonly_working_copy(_USER_DB_NAME) as user_conn:
+        venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
+
+    venue_id = venue_obj.id
+    _announce_venue_selection(venue_obj, source)
 
     fixture_ids = {fixture.id for fixture in fixtures}
     layout_path = preview_layout.layout_path_for_venue(
@@ -410,3 +490,28 @@ def layout_regenerate(
     merged_layout = preview_layout.RigLayout(venue_id=venue_id, entries=merged_entries)
     preview_layout.save_layout(layout_path, merged_layout)
     typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
+
+
+# ---------------------------------------------------------------------------
+# venue list — read-only venue discovery. Never mutates a database; never
+# hides a venue (zero-fixture, or when the active pointer is stale).
+# ---------------------------------------------------------------------------
+
+
+@venue_app.command("list")
+def venue_list() -> None:
+    """List every venue in the working copy, with its fixture count. The
+    active venue (lighting_property.ExecVenueId) is marked, if it still
+    resolves to a real venue. Read-only, never writes anything.
+    """
+    with _readonly_working_copy(_USER_DB_NAME) as user_conn:
+        entries = venues_repo.list_venues_with_fixture_counts(user_conn)
+        active_id = venues_repo.get_exec_venue_id(user_conn)
+
+    if not entries:
+        typer.echo("No venues found.")
+        return
+
+    typer.echo("Venues:")
+    for entry in entries:
+        typer.echo(_format_venue_line(entry, active_id=active_id))

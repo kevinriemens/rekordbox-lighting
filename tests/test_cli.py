@@ -22,6 +22,8 @@ from tests.fixtures.macro_fixtures import (
     sentinel_macro_rows,
 )
 from tests.fixtures.venue_fixtures import (
+    ACTIVE_VENUE_NAME,
+    a_multi_venue_database,
     a_par_fixture,
     a_small_full_arc_venue,
     a_venue,
@@ -216,6 +218,92 @@ class TestPreviewCommand:
 
         # Then: it succeeds by resolving the active venue automatically
         assert result.exit_code == 0
+        # And: the output confirms which venue was used, by id and name,
+        # and that it came from the active-venue fallback (not an
+        # explicit --venue choice)
+        assert str(work_preview_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+        assert "active venue" in result.stdout.lower()
+
+    def test_should_confirm_the_explicit_venue_used_by_id_and_name(
+        self, work_preview_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a second venue that is NOT the active one
+        output_path = tmp_path / "out.html"
+        user_conn = sqlite3.connect(work_preview_dbs["user_path"])
+        other_venue_id = a_venue(user_conn, venue_id=55, name="Second Room")
+        user_conn.close()
+
+        # When: running preview with an explicit --venue different from
+        # the active one
+        result = runner.invoke(
+            cli.app,
+            [
+                "preview",
+                str(work_preview_dbs["macro_id"]),
+                "--venue",
+                str(other_venue_id),
+                "--output",
+                str(output_path),
+            ],
+        )
+
+        # Then: it succeeds and confirms the EXPLICIT venue was used, by
+        # id and name, distinguishable from the active-venue-fallback case
+        assert result.exit_code == 0
+        assert str(other_venue_id) in result.stdout
+        assert "Second Room" in result.stdout
+        assert "explicit" in result.stdout.lower()
+
+    def test_should_fail_clearly_when_no_venue_given_and_none_is_active(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy with a macro but no ExecVenueId set
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        make_user_db(work_dir / "user.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        macro_conn = sqlite3.connect(macro_path)
+        macro_id = a_user_macro(
+            macro_conn, macro_id=10008, name="NO VENUE TEST", beats=32
+        )
+        macro_conn.close()
+
+        # When: running preview with no --venue
+        result = runner.invoke(cli.app, ["preview", str(macro_id)])
+
+        # Then: a clear, handled failure — not an unhandled traceback —
+        # explaining no active venue is set and how to proceed
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "no active venue" in result.stdout.lower()
+        assert "--venue" in result.stdout
+
+    def test_should_fail_clearly_when_the_active_venue_pointer_is_stale(
+        self, work_preview_dbs: dict
+    ) -> None:
+        # Given: ExecVenueId is overwritten to point at a venue that no
+        # longer exists (the real venue from work_preview_dbs still does)
+        user_conn = sqlite3.connect(work_preview_dbs["user_path"])
+        set_lighting_property(user_conn, "ExecVenueId", "999999")
+        user_conn.close()
+
+        # When: running preview with no --venue
+        result = runner.invoke(cli.app, ["preview", str(work_preview_dbs["macro_id"])])
+
+        # Then: a distinct, clean failure from the "no active venue set"
+        # case — naming the stale id and enumerating the still-valid venues
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "999999" in result.stdout
+        assert (
+            "no longer exist" in result.stdout.lower()
+            or "stale" in result.stdout.lower()
+        )
+        assert str(work_preview_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
 
     def test_should_default_the_output_path_when_omitted(
         self, work_preview_dbs: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -274,6 +362,9 @@ class TestPreviewCommand:
             result.exception is not None and "999999" in str(result.exception)
         )
         assert not output_path.exists()
+        # And: the error enumerates the valid venues so the user can retry
+        assert str(work_preview_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
 
     def test_should_never_modify_the_source_databases(
         self, work_preview_dbs: dict, tmp_path: Path
@@ -1074,6 +1165,68 @@ class TestLayoutRegenerateCommand:
 
         # Then: it succeeds against the explicitly named venue
         assert result.exit_code == 0
+        # And: the output confirms the venue used, by id and name, and
+        # that it came from the explicit selection (not a fallback)
+        assert "7" in result.stdout
+        assert "Explicit Venue" in result.stdout
+        assert "explicit" in result.stdout.lower()
+
+    def test_should_confirm_the_active_venue_used_when_venue_is_omitted(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: no --venue flag, but lighting_property.ExecVenueId is set
+        # (work_layout_dbs)
+        # When: regenerating without --venue
+        result = runner.invoke(cli.app, ["layout", "regenerate"])
+
+        # Then: it succeeds and confirms which venue was used, by id and
+        # name, attributed to the active-venue fallback (not explicit)
+        assert result.exit_code == 0
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+        assert "active venue" in result.stdout.lower()
+
+    def test_should_error_clearly_for_an_unknown_venue(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: an explicit venue id that doesn't exist. NOTE: this is
+        # the fixed defect — layout regenerate used to silently succeed
+        # here, treating the unknown id as a venue with no fixtures
+        # instead of failing.
+        # When: regenerating against it
+        result = runner.invoke(cli.app, ["layout", "regenerate", "--venue", "999999"])
+
+        # Then: it now fails cleanly, names the id, and enumerates the
+        # valid venues so the user can retry immediately
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "999999" in result.stdout
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+
+    def test_should_fail_clearly_when_the_active_venue_pointer_is_stale(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: ExecVenueId is overwritten to point at a venue that no
+        # longer exists (the real venue from work_layout_dbs still does)
+        user_conn = sqlite3.connect(work_layout_dbs["user_path"])
+        set_lighting_property(user_conn, "ExecVenueId", "999999")
+        user_conn.close()
+
+        # When: regenerating with no --venue
+        result = runner.invoke(cli.app, ["layout", "regenerate"])
+
+        # Then: a distinct, clean failure from the "no active venue set"
+        # case — naming the stale id and enumerating the still-valid venues
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "999999" in result.stdout
+        assert (
+            "no longer exist" in result.stdout.lower()
+            or "stale" in result.stdout.lower()
+        )
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
 
     def test_should_fail_clearly_when_no_venue_given_and_none_is_active(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1166,3 +1319,243 @@ class TestLayoutRegenerateCommand:
         assert f"{new_rotation:.3f}" in fixture_line, (
             f"new rotation {new_rotation} missing from: {fixture_line!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight venue list` — read-only venue discovery. Never mutates a
+# database; must never hide a venue (zero-fixture, or an active pointer
+# that no longer resolves). See requirement A.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def work_venues_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    """A working copy seeded with the multi-venue edge-case database:
+    one populated venue, one with zero fixtures, and a same-name pair."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    user_path = make_user_db(work_dir / "user.db3")
+    monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+    user_conn = sqlite3.connect(user_path)
+    venue_ids = a_multi_venue_database(user_conn)
+    user_conn.close()
+
+    return {"work_dir": work_dir, "user_path": user_path, "venue_ids": venue_ids}
+
+
+class TestVenueListCommand:
+    def test_should_list_every_venue_with_its_id_name_and_fixture_count(
+        self, work_venues_db: dict
+    ) -> None:
+        # Given: a database with a populated venue (2 fixtures seeded)
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it succeeds, and the populated venue's line shows its id,
+        # name, and correct fixture count
+        assert result.exit_code == 0
+        venue_ids = work_venues_db["venue_ids"]
+        populated_line = next(
+            line
+            for line in result.stdout.splitlines()
+            if str(venue_ids["populated"]) in line
+        )
+        assert "Main Room" in populated_line
+        assert "2" in populated_line
+
+    def test_should_show_a_venue_with_zero_fixtures_not_hide_it(
+        self, work_venues_db: dict
+    ) -> None:
+        # Given: "Empty Room" has zero patched fixtures
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it still appears, with a count of zero — never omitted or
+        # special-cased
+        assert result.exit_code == 0
+        empty_id = work_venues_db["venue_ids"]["empty"]
+        empty_line = next(
+            line for line in result.stdout.splitlines() if str(empty_id) in line
+        )
+        assert "0" in empty_line
+
+    def test_should_distinguish_identically_named_venues_by_id(
+        self, work_venues_db: dict
+    ) -> None:
+        # Given: two venues sharing the exact same name, different ids
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: both ids are present in the output so the user can tell
+        # them apart even though the names alone can't
+        assert result.exit_code == 0
+        assert str(work_venues_db["venue_ids"]["dup_a"]) in result.stdout
+        assert str(work_venues_db["venue_ids"]["dup_b"]) in result.stdout
+
+    def test_should_mark_the_active_venue(self, work_venues_db: dict) -> None:
+        # Given: ExecVenueId points at the populated venue
+        user_conn = sqlite3.connect(work_venues_db["user_path"])
+        set_lighting_property(
+            user_conn, "ExecVenueId", str(work_venues_db["venue_ids"]["populated"])
+        )
+        user_conn.close()
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: exactly one line is visually marked active, and it's the
+        # right one
+        assert result.exit_code == 0
+        lines = result.stdout.splitlines()
+        active_lines = [line for line in lines if "(active)" in line]
+        assert len(active_lines) == 1
+        assert str(work_venues_db["venue_ids"]["populated"]) in active_lines[0]
+
+    def test_should_not_mark_non_active_venues(self, work_venues_db: dict) -> None:
+        # Given: ExecVenueId points at the populated venue only
+        user_conn = sqlite3.connect(work_venues_db["user_path"])
+        set_lighting_property(
+            user_conn, "ExecVenueId", str(work_venues_db["venue_ids"]["populated"])
+        )
+        user_conn.close()
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: the empty venue's line carries no active marker
+        assert result.exit_code == 0
+        empty_id = work_venues_db["venue_ids"]["empty"]
+        empty_line = next(
+            line for line in result.stdout.splitlines() if str(empty_id) in line
+        )
+        assert "(active)" not in empty_line
+
+    def test_should_mark_no_venue_active_when_none_is_set(
+        self, work_venues_db: dict
+    ) -> None:
+        # Given: no lighting_property row at all (never set)
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it succeeds, and no venue is marked active
+        assert result.exit_code == 0
+        assert "(active)" not in result.stdout
+
+    def test_should_show_every_real_venue_and_mark_none_active_when_pointer_is_stale(
+        self, work_venues_db: dict
+    ) -> None:
+        # Given: ExecVenueId points at a venue id that doesn't exist
+        user_conn = sqlite3.connect(work_venues_db["user_path"])
+        set_lighting_property(user_conn, "ExecVenueId", "999999")
+        user_conn.close()
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it doesn't crash or hide any real venue, and marks none active
+        assert result.exit_code == 0
+        assert "(active)" not in result.stdout
+        for venue_id in work_venues_db["venue_ids"].values():
+            assert str(venue_id) in result.stdout
+
+    def test_should_say_plainly_when_there_are_no_venues(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy whose user.db3 has no venue rows at all
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        make_user_db(work_dir / "user.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it says so plainly rather than printing an empty list
+        # silently
+        assert result.exit_code == 0
+        assert "no venues" in result.stdout.lower()
+
+    def test_should_never_modify_the_database(self, work_venues_db: dict) -> None:
+        # Given: the current (seeded) working-copy user.db3
+        before = Path(work_venues_db["user_path"]).read_bytes()
+
+        # When: listing venues
+        runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: byte-for-byte unchanged — this command only reads
+        after = Path(work_venues_db["user_path"]).read_bytes()
+        assert before == after
+
+    def test_should_never_touch_the_live_lightingdb_directory(
+        self,
+        work_venues_db: dict,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        # Given: a live directory that does not even exist
+        nonexistent_live_dir = tmp_path / "never-created-live-dir"
+        monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: it succeeds anyway — proof it never resolved a live path
+        assert result.exit_code == 0
+        assert not nonexistent_live_dir.exists()
+
+    def test_should_error_cleanly_when_the_working_copy_does_not_exist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: listing venues
+        result = runner.invoke(cli.app, ["venue", "list"])
+
+        # Then: a clean, actionable error — not a raw traceback or a bare
+        # database driver error — pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "pull" in result.stdout.lower()
+
+
+# ---------------------------------------------------------------------------
+# Missing working copy — venue-aware commands must fail cleanly, not with
+# a raw traceback or bare database driver error. See requirement D.
+# ---------------------------------------------------------------------------
+
+
+class TestMissingWorkingCopyForVenueAwareCommands:
+    def test_preview_should_error_cleanly_when_the_working_copy_does_not_exist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: running preview
+        result = runner.invoke(cli.app, ["preview", "1"])
+
+        # Then: a clean, handled failure pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "pull" in result.stdout.lower()
+
+    def test_layout_regenerate_should_error_cleanly_when_the_working_copy_does_not_exist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: running layout regenerate
+        result = runner.invoke(cli.app, ["layout", "regenerate"])
+
+        # Then: a clean, handled failure pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "pull" in result.stdout.lower()

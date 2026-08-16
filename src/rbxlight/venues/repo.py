@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from rbxlight.venues.models import Fixture, Venue
+from rbxlight.venues.models import Fixture, Venue, VenueWithFixtureCount
 
 
 def get_venue(conn: sqlite3.Connection, venue_id: int) -> Venue:
@@ -71,3 +71,30 @@ def get_exec_venue_id(conn: sqlite3.Connection) -> int | None:
     if row is None:
         return None
     return int(row[0])
+
+
+def list_venues_with_fixture_counts(
+    conn: sqlite3.Connection,
+) -> list[VenueWithFixtureCount]:
+    """Enumerate every venue with its patched fixture count.
+
+    Venues with zero fixtures are included (count 0), never hidden.
+    Multiple fixtures sharing the same macro_fixture_id (slot collisions)
+    all count individually. Deterministically ordered by venue id — ids
+    are NOT guaranteed contiguous or sequential. Returns an empty list
+    when no venues exist. Single LEFT JOIN + GROUP BY query, no N+1.
+    """
+    rows = conn.execute(
+        'SELECT venue.id, venue.name, venue."order", venue.enabled, '
+        "COUNT(fixture.id) "
+        "FROM venue LEFT JOIN fixture ON fixture.venue_id = venue.id "
+        'GROUP BY venue.id, venue.name, venue."order", venue.enabled '
+        "ORDER BY venue.id"
+    ).fetchall()
+    return [
+        VenueWithFixtureCount(
+            venue=Venue(id=row[0], name=row[1], order=row[2], enabled=row[3]),
+            fixture_count=row[4],
+        )
+        for row in rows
+    ]

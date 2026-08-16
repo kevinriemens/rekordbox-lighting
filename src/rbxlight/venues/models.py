@@ -45,3 +45,14 @@ class Fixture:
     limit_min_y: int
     limit_max_y: int
     tilt_reversal: int
+
+
+@dataclass(frozen=True)
+class VenueWithFixtureCount:
+    """A venue paired with the count of fixtures patched into it — the
+    read model behind `rbxlight venue list` and shared venue-resolution
+    error messages. See rbxlight.venues.repo.list_venues_with_fixture_counts.
+    """
+
+    venue: Venue
+    fixture_count: int

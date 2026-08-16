@@ -121,8 +121,12 @@ def insert_fixture_row(
 
 
 def set_lighting_property(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Set (or overwrite) a lighting_property row — e.g. to move
+    ExecVenueId to a different venue mid-test, including a stale/
+    nonexistent one."""
     conn.execute(
-        "INSERT INTO lighting_property (key, value) VALUES (?, ?)", (key, value)
+        "INSERT OR REPLACE INTO lighting_property (key, value) VALUES (?, ?)",
+        (key, value),
     )
     conn.commit()
 
@@ -260,6 +264,54 @@ def a_venue_with_slot_collisions(conn: sqlite3.Connection) -> int:
     a_moving_head_fixture(conn, fixture_id=15, macro_fixture_id=12, name="LM70S #2")
     a_par_fixture(conn, fixture_id=16, macro_fixture_id=12, name="LPC008S #2")
     return venue_id
+
+
+#: Ids for a_multi_venue_database()'s venues — deliberately non-sequential
+#: and non-contiguous, per the "venue ids are not guaranteed 1,2,3" edge
+#: case (rekordbox-lightingdb-schema skill: real max venue.id = 3, new
+#: venues get the next free id, never assume a contiguous range).
+MULTI_VENUE_POPULATED_ID: int = 5
+MULTI_VENUE_EMPTY_ID: int = 42
+MULTI_VENUE_DUP_A_ID: int = 7
+MULTI_VENUE_DUP_B_ID: int = 1001
+MULTI_VENUE_DUP_NAME: str = "VIP Lounge"
+
+
+def a_multi_venue_database(conn: sqlite3.Connection) -> dict[str, int]:
+    """Seeds a user.db3 connection with 4 venues covering the venue-listing
+    contract's edge cases in one shot:
+
+    - a populated venue (2 fixtures, different slots)
+    - a venue with zero patched fixtures — must still be listed, count 0
+    - two venues sharing the exact same name, different ids — the id must
+      remain the unambiguous way to tell them apart
+
+    Returns a dict of venue_id keyed by role: "populated", "empty",
+    "dup_a", "dup_b".
+    """
+    populated_id = a_venue(conn, venue_id=MULTI_VENUE_POPULATED_ID, name="Main Room")
+    a_par_fixture(
+        conn, fixture_id=201, venue_id=populated_id, macro_fixture_id=1, name="Par 1"
+    )
+    a_moving_head_fixture(
+        conn,
+        fixture_id=202,
+        venue_id=populated_id,
+        macro_fixture_id=11,
+        name="Head 1",
+    )
+
+    empty_id = a_venue(conn, venue_id=MULTI_VENUE_EMPTY_ID, name="Empty Room")
+
+    dup_a_id = a_venue(conn, venue_id=MULTI_VENUE_DUP_A_ID, name=MULTI_VENUE_DUP_NAME)
+    dup_b_id = a_venue(conn, venue_id=MULTI_VENUE_DUP_B_ID, name=MULTI_VENUE_DUP_NAME)
+
+    return {
+        "populated": populated_id,
+        "empty": empty_id,
+        "dup_a": dup_a_id,
+        "dup_b": dup_b_id,
+    }
 
 
 # ---------------------------------------------------------------------------
