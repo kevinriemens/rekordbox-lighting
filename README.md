@@ -11,6 +11,13 @@ rbxlight push --write         # send changes back to rekordbox (backs up first)
 
 ---
 
+> **Disclaimer:** This is an unofficial, community-made tool. It is not affiliated with, endorsed
+> by, or supported by Pioneer/AlphaTheta in any way. Rekordbox is a trademark of AlphaTheta
+> Corporation. There is no warranty and no liability for any damages, data loss, or gig mishaps
+> arising from its use — **use at your own risk.**
+
+---
+
 ## ⚠️ Read this before anything else
 
 This tool writes to your **live rekordbox lighting databases**. Those are the light show you perform
@@ -35,9 +42,14 @@ If something goes wrong, skip to [Undoing a mistake](#undoing-a-mistake).
 The rekordbox lighting GUI is slow to work in. This tool exists so you can:
 
 - **See a macro without a rig.** A single HTML file draws your truss and animates the macro across it.
+
+  ![Macro preview demo](docs/demo.gif)
+
 - **Duplicate and transform macros** — clone, recolour, stretch, mirror — without clicking through menus.
 - **Generate macros from code** — chases, sweeps, ping-pongs, colour cycles, strobe hits.
 - **Edit macros as text.** Export to YAML, edit in any editor, import back.
+- **Generate macros with an LLM.** An agent setup lets you describe a macro in plain language and
+  have an LLM produce it for you.
 
 Everything runs offline on your own machine. Nothing is uploaded anywhere.
 
