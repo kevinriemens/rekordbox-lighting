@@ -12,7 +12,7 @@ import sqlite3
 
 from rbxlight.macros import repo as macros_repo
 from rbxlight.preview.extract import build_fixture_program
-from rbxlight.preview.layout import RigLayout, normalized_structure
+from rbxlight.preview.layout import RigLayout, frame_cm_to_dict, normalized_structure
 from rbxlight.venues import repo as venues_repo
 
 #: Static default tempo used for every preview — rekordbox macros carry no
@@ -77,7 +77,16 @@ def build_preview_payload(
             },
             ...
           ],
+          "frame_cm": {"min_x": float, "max_x": float, "min_y": float,
+                       "max_y": float} | None,  # see layout.NormalizationFrame
         }
+
+    `frame_cm` mirrors `layout.frame_cm` unchanged — the real-world (cm)
+    bounding box the layout's fixtures and structure were normalized
+    against, or None when the layout carries no persisted frame (a
+    legacy layout saved before this field existed). This is what lets
+    the renderer show true measurements and convert an edit back into
+    real-world coordinates; it is never recomputed here.
 
     Raises MacroNotFoundError / VenueNotFoundError for an unknown id.
     Raises MissingLayoutEntryError if `layout` doesn't cover every fixture
@@ -159,4 +168,5 @@ def build_preview_payload(
         "bpm": bpm,
         "truss": normalized_structure(layout),
         "fixtures": fixtures_out,
+        "frame_cm": frame_cm_to_dict(layout.frame_cm),
     }

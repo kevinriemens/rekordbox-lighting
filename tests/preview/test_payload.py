@@ -382,7 +382,7 @@ class TestBuildPreviewPayload:
         actual_truss = tuple(tuple(point) for point in result["truss"])
         assert actual_truss == expected_truss
 
-    def test_should_keep_the_payload_shape_unchanged_by_the_shared_frame_change(
+    def test_should_keep_the_payload_shape_unchanged_by_the_shared_frame_and_reference_box_change(
         self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
     ) -> None:
         # Given: a fully built payload
@@ -395,15 +395,81 @@ class TestBuildPreviewPayload:
             macro_db_conn, user_db_conn, macro_id, venue_id, rig_layout
         )
 
-        # Then: same top-level keys and value shapes as before — only the
-        # source/correctness of "truss" changed, not the JSON contract.
-        # "truss" stays a sequence of (x, y) pairs of real numbers; the
-        # exact Python container type (list vs tuple) isn't the contract,
-        # JSON serializability of that shape is.
-        assert set(result.keys()) == {"macro", "venue", "bpm", "truss", "fixtures"}
+        # Then: same top-level keys and value shapes as before, PLUS the
+        # new real-world (cm) reference box — this is a deliberate
+        # tripwire against accidental payload growth, so it is extended
+        # to the new intended shape rather than weakened. "truss" stays a
+        # sequence of (x, y) pairs of real numbers; the exact Python
+        # container type (list vs tuple) isn't the contract, JSON
+        # serializability of that shape is.
+        assert set(result.keys()) == {
+            "macro",
+            "venue",
+            "bpm",
+            "truss",
+            "fixtures",
+            "frame_cm",
+        }
         for point in result["truss"]:
             assert len(point) == 2
             assert isinstance(point[0], (int, float))
             assert isinstance(point[1], (int, float))
+        assert set(result["frame_cm"].keys()) == {"min_x", "max_x", "min_y", "max_y"}
+        for value in result["frame_cm"].values():
+            assert isinstance(value, (int, float))
+        serialized = json.dumps(result, allow_nan=False)
+        assert isinstance(serialized, str)
+
+    def test_should_include_a_real_world_reference_box_matching_the_layouts_frame(
+        self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
+    ) -> None:
+        # Given: a layout built with its own cm normalization frame — the
+        # real-world box every fixture position was normalized against
+        macro_id = a_user_macro(macro_db_conn, macro_id=10008)
+        venue_id = a_small_full_arc_venue(user_db_conn)
+        rig_layout = _layout_for(user_db_conn, venue_id)
+        assert rig_layout.frame_cm is not None
+
+        # When: building the payload
+        result = payload.build_preview_payload(
+            macro_db_conn, user_db_conn, macro_id, venue_id, rig_layout
+        )
+
+        # Then: the embedded reference box matches the exact cm frame the
+        # layout was built with — what lets the browser display true
+        # measurements and convert an edit back into real-world
+        # coordinates
+        assert result["frame_cm"] == {
+            "min_x": rig_layout.frame_cm.min_x,
+            "max_x": rig_layout.frame_cm.max_x,
+            "min_y": rig_layout.frame_cm.min_y,
+            "max_y": rig_layout.frame_cm.max_y,
+        }
+
+    def test_should_produce_a_usable_payload_when_the_layout_has_no_reference_box(
+        self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
+    ) -> None:
+        # Given: a layout with no persisted cm frame at all (e.g. loaded
+        # from a file saved before this field existed — see
+        # rbxlight.preview.layout's frame_cm defaulting convention)
+        macro_id = a_user_macro(macro_db_conn, macro_id=10008)
+        venue_id = a_small_full_arc_venue(user_db_conn)
+        generated = _layout_for(user_db_conn, venue_id)
+        frameless_layout = RigLayout(
+            venue_id=generated.venue_id,
+            entries=generated.entries,
+            unmapped_cell_ids=generated.unmapped_cell_ids,
+            structure_cm=generated.structure_cm,
+            frame_cm=None,
+        )
+
+        # When: building the payload
+        result = payload.build_preview_payload(
+            macro_db_conn, user_db_conn, macro_id, venue_id, frameless_layout
+        )
+
+        # Then: still a usable, fully JSON-serializable payload — the
+        # reference box is simply absent, not a crash
+        assert result["frame_cm"] is None
         serialized = json.dumps(result, allow_nan=False)
         assert isinstance(serialized, str)

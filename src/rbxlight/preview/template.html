@@ -91,6 +91,7 @@
   }
   #layoutStatus { min-height: 14px; margin: 8px 0 0; color: #8fffb0; font-size: 11px; }
   #layoutStatus.error { color: #ff9fd0; }
+  #unsavedIndicator { color: #ffcf6b; margin: 8px 0 0; }
   #jsonPreview {
     width: 100%; margin-top: 8px; background: #0b0c10; color: #9aa0ac; border: 1px solid #22242c;
     border-radius: 6px; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -137,11 +138,11 @@
 </div>
 
 <div class="legend" id="legend" aria-hidden="true">
-  <span class="hint">Click a fixture to select it, drag to reposition — see the layout panel to rotate &amp; save.</span>
+  <span class="hint">Click a fixture or truss point to select, drag to reposition. Double-click a truss segment to insert a point; Delete removes a selected truss point — see the layout panel to rotate, measure &amp; save.</span>
 </div>
 
 <div id="stage-wrap">
-  <canvas id="stage" tabindex="0" aria-label="Rig layout stage. Click a fixture to select, drag to reposition, arrow keys to nudge."></canvas>
+  <canvas id="stage" tabindex="0" aria-label="Rig layout stage. Click a fixture or truss point to select, drag to reposition, arrow keys to nudge. Double-click a truss segment to insert a point; Delete or Backspace removes the selected truss point."></canvas>
   <div class="empty-state" id="emptyState" hidden>No fixtures patched into this venue.</div>
 
   <div class="plan-panel" id="planPanel">
@@ -151,8 +152,13 @@
 
   <div class="layout-panel" id="layoutPanel">
     <div class="panel-section" id="selSection">
-      <h2>Selected fixture</h2>
-      <p class="panel-hint" id="selEmpty">Nothing selected. Click a fixture on stage.</p>
+      <h2 id="selHeading">Selected fixture</h2>
+      <p class="panel-hint" id="selEmpty">Nothing selected. Click a fixture or truss point on stage.</p>
+      <p class="panel-hint" id="trussDisabledHint" hidden>
+        This layout has no saved <code>frame_cm</code>, so truss edits can't be converted to
+        real-world centimetres. Run <code>rbxlight layout regenerate --write</code> to gain a
+        frame, then reload this preview. Fixture editing still works normally.
+      </p>
       <div id="selBody" hidden>
         <div class="sel-row"><span class="k">Label</span><span class="v" id="selLabel"></span></div>
         <div class="sel-row"><span class="k">Slot</span><span class="v" id="selSlot"></span></div>
@@ -176,6 +182,16 @@
           <span>&deg; total</span>
         </div>
       </div>
+      <div id="trussBody" hidden>
+        <div class="sel-row"><span class="k">Point</span><span class="v" id="trussPointIndex"></span></div>
+        <div class="sel-row"><span class="k">X</span><span class="v" id="trussPointX"></span></div>
+        <div class="sel-row"><span class="k">Y</span><span class="v" id="trussPointY"></span></div>
+        <div class="sel-row"><span class="k">Truss span</span><span class="v" id="trussSpanCm"></span></div>
+        <p class="panel-hint">
+          Arrow keys nudge (shift = coarse). Delete/Backspace removes this point (min. 2 required).
+          Insert/+ adds a point next to it. Double-click a segment on stage to insert a point there.
+        </p>
+      </div>
     </div>
     <div class="panel-section">
       <h2>Layout</h2>
@@ -185,6 +201,7 @@
         <button id="copyLayoutBtn" type="button">⧉ Copy layout JSON</button>
         <button id="resetLayoutBtn" type="button">↺ Reset to generated layout</button>
       </div>
+      <p id="unsavedIndicator" class="panel-hint" hidden>● Unsaved changes — export before closing this tab.</p>
       <p id="layoutStatus" role="status" aria-live="polite"></p>
       <textarea id="jsonPreview" rows="4" readonly hidden aria-label="Layout JSON, select and copy manually if needed"></textarea>
     </div>
@@ -485,9 +502,92 @@
     };
   });
 
+  // `truss` is always the CURRENT normalized [0,1]-ish polyline used for
+  // drawing (front rails + plan-view row) — see syncTrussNormalized().
   var truss = (RBXLIGHT_PAYLOAD.truss || []).map(function (p) {
     return Array.isArray(p) ? { x: p[0], y: p[1] } : { x: p.x, y: p.y };
   });
+
+  // ---------------------------------------------------------------------
+  // Truss cm state. `frame_cm` is the shared real-world bounding box the
+  // truss AND every fixture were normalized against (see payload.py /
+  // layout.NormalizationFrame) — it is FIXED: never recomputed or
+  // rescaled here, only echoed back byte-for-byte on export, because
+  // fixtures are normalized against this same frame and rescaling it
+  // would silently move every light in the rig.
+  //
+  // `frame_cm` can be null for a legacy layout saved before frames
+  // existed — real centimetres are then unrecoverable, so truss editing
+  // is disabled entirely (fixture editing keeps working). We never
+  // invent a frame to paper over that gap.
+  var frameCm = (RBXLIGHT_PAYLOAD.frame_cm &&
+    typeof RBXLIGHT_PAYLOAD.frame_cm.min_x === "number") ? RBXLIGHT_PAYLOAD.frame_cm : null;
+  var trussEditable = frameCm !== null;
+
+  // Mirrors preview.layout._MARGIN_FRACTION exactly (not shipped in the
+  // payload — a shared magic constant, same category as the
+  // DEFAULT_PAN_DEGREES/DEFAULT_TILT_DEGREES mirrors above). The payload's
+  // `truss` array was produced by _normalize_point, which (a) reserves
+  // this fraction of [0,1] as margin on every side and (b) INVERTS the
+  // vertical axis (ground = the larger end of [0,1], so `ny` is 1-fracY,
+  // not fracY). A conversion that skips either step reconstructs the
+  // wrong cm point — verified concretely: the true ground-level endpoint
+  // (0, 0) cm round-trips through a margin/flip-blind inverse as roughly
+  // (12, 210) cm, i.e. flipped almost to the top of the arch. Both steps
+  // must be inverted for the panel's centimetre readout and the exported
+  // structure_cm to be real-world correct (req 10) rather than merely
+  // shaped correctly.
+  var TRUSS_MARGIN_FRACTION = 0.05;
+
+  function cmToNorm(pt) {
+    var spanX = frameCm.max_x - frameCm.min_x;
+    var spanY = frameCm.max_y - frameCm.min_y;
+    var fracX = spanX === 0 ? 0.5 : (pt.x - frameCm.min_x) / spanX;
+    var fracY = spanY === 0 ? 0.5 : (pt.y - frameCm.min_y) / spanY;
+    var m = TRUSS_MARGIN_FRACTION;
+    return {
+      x: m + fracX * (1 - 2 * m),
+      y: m + (1 - fracY) * (1 - 2 * m)
+    };
+  }
+
+  function normToCm(n) {
+    var spanX = frameCm.max_x - frameCm.min_x;
+    var spanY = frameCm.max_y - frameCm.min_y;
+    var m = TRUSS_MARGIN_FRACTION;
+    var denom = 1 - 2 * m;
+    var fracX = (n.x - m) / denom;
+    var fracY = 1 - (n.y - m) / denom;
+    return {
+      x: frameCm.min_x + fracX * spanX,
+      y: frameCm.min_y + fracY * spanY
+    };
+  }
+
+  // Truth held in cm (the unit the side panel and the export must use —
+  // see rekordbox-lightingdb-schema / xclusive-rig-profile projection
+  // note). `truss` (normalized) is re-derived from this after every edit.
+  var trussCm = trussEditable ? truss.map(normToCm) : null;
+
+  function cloneCmPoints(pts) {
+    return pts.map(function (p) { return { x: p.x, y: p.y }; });
+  }
+
+  // Snapshot for "Reset to generated layout" — see generatedSnapshot above.
+  var trussGeneratedSnapshotCm = trussCm ? cloneCmPoints(trussCm) : null;
+
+  function syncTrussNormalized() {
+    if (!trussEditable) return;
+    truss = trussCm.map(cmToNorm);
+  }
+
+  function trussSpanLengthCm() {
+    var total = 0;
+    for (var i = 0; i < trussCm.length - 1; i++) {
+      total += Math.hypot(trussCm[i + 1].x - trussCm[i].x, trussCm[i + 1].y - trussCm[i].y);
+    }
+    return total;
+  }
 
   var totalBeats = Math.max(0, RBXLIGHT_PAYLOAD.macro && RBXLIGHT_PAYLOAD.macro.beats || 0);
 
@@ -527,6 +627,7 @@
     ? RBXLIGHT_PAYLOAD.venue.id : 0;
 
   // Selected-fixture panel elements
+  var selHeading = document.getElementById("selHeading");
   var selEmpty = document.getElementById("selEmpty");
   var selBody = document.getElementById("selBody");
   var selLabel = document.getElementById("selLabel");
@@ -539,6 +640,15 @@
   var panDegreesInput = document.getElementById("panDegreesInput");
   var tiltDegreesInput = document.getElementById("tiltDegreesInput");
 
+  // Selected-truss-point panel elements
+  var trussBody = document.getElementById("trussBody");
+  var trussDisabledHint = document.getElementById("trussDisabledHint");
+  var trussPointIndexEl = document.getElementById("trussPointIndex");
+  var trussPointXEl = document.getElementById("trussPointX");
+  var trussPointYEl = document.getElementById("trussPointY");
+  var trussSpanCmEl = document.getElementById("trussSpanCm");
+  trussDisabledHint.hidden = trussEditable;
+
   // Save/layout panel elements
   var layoutPathEl = document.getElementById("layoutPath");
   var layoutStatusEl = document.getElementById("layoutStatus");
@@ -546,8 +656,25 @@
   var copyLayoutBtn = document.getElementById("copyLayoutBtn");
   var resetLayoutBtn = document.getElementById("resetLayoutBtn");
   var jsonPreview = document.getElementById("jsonPreview");
+  var unsavedIndicatorEl = document.getElementById("unsavedIndicator");
 
   layoutPathEl.textContent = "work/layouts/layout_venue_" + venueId + ".json";
+
+  // ---------------------------------------------------------------------
+  // Unsaved-edit tracking (req 13) — any fixture or truss edit marks the
+  // layout dirty; Reset and a successful export clear it; a dirty tab
+  // close is confirmed via beforeunload.
+  // ---------------------------------------------------------------------
+  var hasUnsavedEdits = false;
+  function setDirty(v) {
+    hasUnsavedEdits = v;
+    unsavedIndicatorEl.hidden = !v;
+  }
+  window.addEventListener("beforeunload", function (evt) {
+    if (!hasUnsavedEdits) return;
+    evt.preventDefault();
+    evt.returnValue = "";
+  });
 
   var initialBpm = (RBXLIGHT_PAYLOAD.bpm && RBXLIGHT_PAYLOAD.bpm > 0) ? RBXLIGHT_PAYLOAD.bpm : 120;
   bpmInput.value = initialBpm;
@@ -618,21 +745,46 @@
   // Selection + rotation panel wiring
   // ---------------------------------------------------------------------
   var selectedFixture = null;
+  var selectedTrussPoint = null; // index into trussCm, or null
 
+  // Selecting a fixture and selecting a truss point are mutually
+  // exclusive (req 1/2) — each setter clears the other before the panel
+  // is refreshed, so the outcome is always deterministic.
   function selectFixture(f) {
     selectedFixture = f;
-    if (!f) {
+    if (f) selectedTrussPoint = null;
+    refreshSelectionPanel();
+  }
+
+  function selectTrussPoint(index) {
+    selectedTrussPoint = index;
+    if (index !== null) selectedFixture = null;
+    refreshSelectionPanel();
+  }
+
+  function refreshSelectionPanel() {
+    if (selectedFixture) {
+      selHeading.textContent = "Selected fixture";
+      selEmpty.hidden = true;
+      selBody.hidden = false;
+      trussBody.hidden = true;
+      selLabel.textContent = selectedFixture.label;
+      selSlot.textContent = selectedFixture.slotName;
+      selKind.textContent = (KIND_META[selectedFixture.kind] || KIND_META.other).label;
+      syncRotationUi();
+      syncSweepUi();
+    } else if (selectedTrussPoint !== null) {
+      selHeading.textContent = "Selected truss point";
+      selEmpty.hidden = true;
+      selBody.hidden = true;
+      trussBody.hidden = false;
+      updateTrussPanel();
+    } else {
+      selHeading.textContent = "Selected fixture";
       selEmpty.hidden = false;
       selBody.hidden = true;
-      return;
+      trussBody.hidden = true;
     }
-    selEmpty.hidden = true;
-    selBody.hidden = false;
-    selLabel.textContent = f.label;
-    selSlot.textContent = f.slotName;
-    selKind.textContent = (KIND_META[f.kind] || KIND_META.other).label;
-    syncRotationUi();
-    syncSweepUi();
   }
 
   function syncRotationUi() {
@@ -655,30 +807,51 @@
     }
   }
 
+  // Real-world centimetre measurements (req 10) — the selected point's
+  // coordinates and the truss's overall span (cumulative polyline
+  // length), read live off the cm source of truth.
+  function updateTrussPanel() {
+    if (selectedTrussPoint === null) return;
+    var p = trussCm[selectedTrussPoint];
+    trussPointIndexEl.textContent = (selectedTrussPoint + 1) + " / " + trussCm.length;
+    trussPointXEl.textContent = p.x.toFixed(1) + " cm";
+    trussPointYEl.textContent = p.y.toFixed(1) + " cm";
+    trussSpanCmEl.textContent = trussSpanLengthCm().toFixed(1) + " cm";
+  }
+
   rotationSlider.addEventListener("input", function () {
     if (!selectedFixture) return;
     var v = parseFloat(rotationSlider.value);
     if (!isFinite(v)) return;
     selectedFixture.rotation = normalizeDeg(v);
     rotationReadout.textContent = Math.round(selectedFixture.rotation) + "\u00B0";
+    setDirty(true);
   });
 
   panDegreesInput.addEventListener("input", function () {
     if (!selectedFixture) return;
     var v = parseFloat(panDegreesInput.value);
-    if (isFinite(v) && v >= 0) selectedFixture.panDegrees = v;
+    if (isFinite(v) && v >= 0) { selectedFixture.panDegrees = v; setDirty(true); }
   });
 
   tiltDegreesInput.addEventListener("input", function () {
     if (!selectedFixture) return;
     var v = parseFloat(tiltDegreesInput.value);
-    if (isFinite(v) && v >= 0) selectedFixture.tiltDegrees = v;
+    if (isFinite(v) && v >= 0) { selectedFixture.tiltDegrees = v; setDirty(true); }
   });
 
   // ---------------------------------------------------------------------
   // Save-layout wiring — same JSON shape rbxlight.preview.layout reads:
   // {venue_id, entries: [{fixture_id, x, y, label, kind, rotation,
-  // pan_degrees, tilt_degrees}, ...]}
+  // pan_degrees, tilt_degrees}, ...], structure_cm, frame_cm} — the same
+  // shape as the saved-layout file on disk (req E), so the CLI can parse
+  // an exported file directly. `frame_cm` is passed through unchanged
+  // (never recomputed — the FIXED-frame rule, req C). When frame_cm
+  // couldn't be recovered (legacy layout, req F) we emit null for both
+  // rather than inventing a frame — `rbxlight layout install` already
+  // tolerates a missing/null structure_cm (defaults to the standard
+  // arch) and a missing/null frame_cm (recovered from the structure's
+  // own bounds), so this degrades honestly instead of failing silently.
   // ---------------------------------------------------------------------
   function currentLayoutObject() {
     return {
@@ -694,7 +867,13 @@
           pan_degrees: f.panDegrees,
           tilt_degrees: f.tiltDegrees
         };
-      })
+      }),
+      structure_cm: trussEditable
+        ? trussCm.map(function (p) { return [p.x, p.y]; })
+        : null,
+      frame_cm: trussEditable
+        ? { min_x: frameCm.min_x, max_x: frameCm.max_x, min_y: frameCm.min_y, max_y: frameCm.max_y }
+        : null
     };
   }
 
@@ -717,6 +896,7 @@
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    setDirty(false);
     showLayoutStatus("Downloaded. Move it to " + layoutPathEl.textContent + ".");
   });
 
@@ -741,6 +921,7 @@
       var ok = fallbackCopy(json);
       jsonPreview.hidden = false;
       if (ok) {
+        setDirty(false);
         showLayoutStatus("Copied to clipboard.");
       } else {
         showLayoutStatus("Couldn't access the clipboard — JSON is below, select and copy manually.", true);
@@ -748,7 +929,7 @@
     }
     if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(json).then(
-        function () { jsonPreview.hidden = true; showLayoutStatus("Copied to clipboard."); },
+        function () { jsonPreview.hidden = true; setDirty(false); showLayoutStatus("Copied to clipboard."); },
         onFail
       );
     } else {
@@ -766,7 +947,16 @@
       f.panDegrees = snap.panDegrees;
       f.tiltDegrees = snap.tiltDegrees;
     });
+    if (trussEditable) {
+      trussCm = cloneCmPoints(trussGeneratedSnapshotCm);
+      syncTrussNormalized();
+    }
     if (selectedFixture) { syncRotationUi(); syncSweepUi(); }
+    if (selectedTrussPoint !== null) {
+      if (selectedTrussPoint >= trussCm.length) selectedTrussPoint = trussCm.length - 1;
+      updateTrussPanel();
+    }
+    setDirty(false);
     showLayoutStatus("Layout reset to the generated positions.");
   });
 
@@ -824,14 +1014,41 @@
     };
   }
 
+  // Truss-only projection: UNCLAMPED, so a point dragged past the stage
+  // edge keeps its true (possibly >1 or <0) value instead of pinning to
+  // the boundary (req 8). Fixtures keep using the clamping project()/
+  // unproject() above unchanged — this path exists for the truss only.
+  function projectTrussUnclamped(nx, ny) {
+    var w = stageSize.width, h = stageSize.height;
+    return {
+      x: STAGE_PAD + nx * Math.max(1, w - 2 * STAGE_PAD),
+      y: STAGE_PAD + ny * Math.max(1, h - 2 * STAGE_PAD)
+    };
+  }
+
+  function unprojectTrussUnclamped(px, py) {
+    var w = stageSize.width, h = stageSize.height;
+    return {
+      x: (px - STAGE_PAD) / Math.max(1, w - 2 * STAGE_PAD),
+      y: (py - STAGE_PAD) / Math.max(1, h - 2 * STAGE_PAD)
+    };
+  }
+
+  function projectTrussPoints(points) {
+    return points.map(function (p) { return projectTrussUnclamped(p.x, p.y); });
+  }
+
   // ---------------------------------------------------------------------
   // Pointer interaction: click to select, drag to reposition. Kept
   // entirely separate from playback state — dragging never touches
   // state.playing/state.beat, so it can't disturb playback.
   // ---------------------------------------------------------------------
   var HIT_RADIUS = 16;
+  var TRUSS_HIT_RADIUS = 10; // smaller target than a fixture — it wins ties (req 3)
+  var TRUSS_SEGMENT_HIT_DIST = 14;
   var DRAG_THRESHOLD = 3;
   var dragState = null;
+  var trussDragState = null;
 
   function canvasPointerPos(evt) {
     var rect = canvas.getBoundingClientRect();
@@ -849,12 +1066,95 @@
     return best;
   }
 
+  // Returns the index of the truss point hit, or -1. A smaller radius
+  // than fixtures on purpose (req 3: "the smaller target" — the truss
+  // handle wins any overlap because it's checked, and matched, first).
+  function hitTestTrussPoint(px, py) {
+    if (!trussEditable) return -1;
+    var best = -1, bestDist = TRUSS_HIT_RADIUS;
+    for (var i = 0; i < trussCm.length; i++) {
+      var pt = projectTrussUnclamped(truss[i].x, truss[i].y);
+      var d = Math.hypot(pt.x - px, pt.y - py);
+      if (d <= bestDist) { bestDist = d; best = i; }
+    }
+    return best;
+  }
+
+  // Nearest segment to a screen point, for double-click-to-insert (req 5).
+  // Returns {index, t} (t = 0..1 along that segment) or null.
+  function hitTestTrussSegment(px, py) {
+    if (!trussEditable || trussCm.length < 2) return null;
+    var pts = projectTrussPoints(truss);
+    var bestIndex = -1, bestDist = TRUSS_SEGMENT_HIT_DIST, bestT = 0;
+    for (var i = 0; i < pts.length - 1; i++) {
+      var a = pts[i], b = pts[i + 1];
+      var dx = b.x - a.x, dy = b.y - a.y;
+      var lenSq = dx * dx + dy * dy;
+      var t = lenSq > 1e-9 ? clamp(((px - a.x) * dx + (py - a.y) * dy) / lenSq, 0, 1) : 0;
+      var cx = a.x + t * dx, cy = a.y + t * dy;
+      var d = Math.hypot(px - cx, py - cy);
+      if (d < bestDist) { bestDist = d; bestIndex = i; bestT = t; }
+    }
+    return bestIndex === -1 ? null : { index: bestIndex, t: bestT };
+  }
+
+  function updateTrussCmAt(index, cmPoint) {
+    trussCm[index] = cmPoint;
+    syncTrussNormalized();
+  }
+
+  function deleteSelectedTrussPoint() {
+    if (selectedTrussPoint === null) return;
+    if (trussCm.length <= 2) {
+      // Mirrors the Python-side validation (DegenerateStructureError) —
+      // the page must never be able to produce a file the CLI rejects.
+      showLayoutStatus("Can't delete — a truss must keep at least two endpoints.", true);
+      return;
+    }
+    var removedIndex = selectedTrussPoint;
+    trussCm.splice(removedIndex, 1);
+    syncTrussNormalized();
+    setDirty(true);
+    selectTrussPoint(Math.min(removedIndex, trussCm.length - 1));
+  }
+
+  // Shared by both insertion entry points (toolbar/keyboard midpoint-insert
+  // and double-click-on-segment): splice a new point at `segIndex + 1`,
+  // interpolated by `t` (0..1) along that segment, then re-sync + select.
+  function insertTrussPointAt(segIndex, t) {
+    var a = trussCm[segIndex], b = trussCm[segIndex + 1];
+    trussCm.splice(segIndex + 1, 0, { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) });
+    syncTrussNormalized();
+    setDirty(true);
+    selectTrussPoint(segIndex + 1);
+  }
+
+  function insertMidpointNearSelected() {
+    if (selectedTrussPoint === null || trussCm.length < 2) return;
+    var segIndex = selectedTrussPoint < trussCm.length - 1 ? selectedTrussPoint : selectedTrussPoint - 1;
+    insertTrussPointAt(segIndex, 0.5);
+  }
+
   canvas.addEventListener("pointerdown", function (evt) {
     var pos = canvasPointerPos(evt);
-    var hit = hitTestFixture(pos.x, pos.y);
     canvas.focus();
+
+    // Truss handles are checked FIRST and unconditionally win any overlap
+    // with a fixture underneath — a decided, deterministic tie-break
+    // (req 3), not something to re-litigate per-click.
+    var trussHitIndex = hitTestTrussPoint(pos.x, pos.y);
+    if (trussHitIndex !== -1) {
+      canvas.setPointerCapture(evt.pointerId);
+      trussDragState = { index: trussHitIndex, pointerId: evt.pointerId, moved: false, startX: pos.x, startY: pos.y };
+      canvas.style.cursor = "grabbing";
+      evt.preventDefault();
+      return;
+    }
+
+    var hit = hitTestFixture(pos.x, pos.y);
     if (!hit) {
       selectFixture(null);
+      selectTrussPoint(null);
       return;
     }
     canvas.setPointerCapture(evt.pointerId);
@@ -864,6 +1164,25 @@
   });
 
   canvas.addEventListener("pointermove", function (evt) {
+    if (trussDragState && trussDragState.pointerId === evt.pointerId) {
+      var tpos = canvasPointerPos(evt);
+      var tdx = tpos.x - trussDragState.startX, tdy = tpos.y - trussDragState.startY;
+      if (!trussDragState.moved && Math.hypot(tdx, tdy) > DRAG_THRESHOLD) trussDragState.moved = true;
+      if (trussDragState.moved) {
+        // Unclamped on purpose: dragging past the stage bounds is
+        // ACCEPTED (req 8) — the geometry keeps the out-of-bounds value,
+        // the view never rescales to compensate.
+        var normPt = unprojectTrussUnclamped(tpos.x, tpos.y);
+        updateTrussCmAt(trussDragState.index, normToCm(normPt));
+        if (selectedTrussPoint !== trussDragState.index) {
+          selectTrussPoint(trussDragState.index);
+        } else {
+          updateTrussPanel();
+        }
+        setDirty(true);
+      }
+      return;
+    }
     if (dragState && dragState.pointerId === evt.pointerId) {
       var pos = canvasPointerPos(evt);
       var dx = pos.x - dragState.startX, dy = pos.y - dragState.startY;
@@ -873,14 +1192,24 @@
         dragState.fixture.x = norm.x;
         dragState.fixture.y = norm.y;
         if (selectedFixture !== dragState.fixture) selectFixture(dragState.fixture);
+        setDirty(true);
       }
       return;
     }
     var hoverPos = canvasPointerPos(evt);
-    canvas.style.cursor = hitTestFixture(hoverPos.x, hoverPos.y) ? "grab" : "default";
+    var overTruss = hitTestTrussPoint(hoverPos.x, hoverPos.y) !== -1;
+    canvas.style.cursor = (overTruss || hitTestFixture(hoverPos.x, hoverPos.y)) ? "grab" : "default";
   });
 
   function endDrag(evt) {
+    if (trussDragState && trussDragState.pointerId === evt.pointerId) {
+      if (!trussDragState.moved) {
+        selectTrussPoint(trussDragState.index);
+      }
+      canvas.style.cursor = "grab";
+      trussDragState = null;
+      return;
+    }
     if (!dragState || dragState.pointerId !== evt.pointerId) return;
     if (!dragState.moved) {
       selectFixture(dragState.fixture);
@@ -891,24 +1220,79 @@
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
 
+  // Double-click a truss segment to insert a new point on it (req 5),
+  // interpolated in cm at the clicked point's position along the segment.
+  canvas.addEventListener("dblclick", function (evt) {
+    if (!trussEditable) return;
+    var pos = canvasPointerPos(evt);
+    if (hitTestTrussPoint(pos.x, pos.y) !== -1) return; // double-click on a handle itself: no-op
+    var seg = hitTestTrussSegment(pos.x, pos.y);
+    if (!seg) return;
+    insertTrussPointAt(seg.index, seg.t);
+    evt.preventDefault();
+  });
+
+  // Keyboard editing for a selected truss point (req 9): arrow keys nudge
+  // (shift = coarser step, same convention as fixtures below), Delete/
+  // Backspace removes it, Insert/+/= adds a new point next to it, Escape
+  // deselects. Nudging is unclamped for the same out-of-bounds reason as
+  // dragging (req 8).
+  function handleTrussKeydown(evt) {
+    var step = evt.shiftKey ? 0.03 : 0.01;
+    var handled = true;
+    switch (evt.key) {
+      case "ArrowUp": nudgeTrussPoint(0, -step); break;
+      case "ArrowDown": nudgeTrussPoint(0, step); break;
+      case "ArrowLeft": nudgeTrussPoint(-step, 0); break;
+      case "ArrowRight": nudgeTrussPoint(step, 0); break;
+      case "Delete":
+      case "Backspace": deleteSelectedTrussPoint(); break;
+      case "Insert":
+      case "+":
+      case "=": insertMidpointNearSelected(); break;
+      case "Escape": selectTrussPoint(null); break;
+      default: handled = false;
+    }
+    if (handled) evt.preventDefault();
+  }
+
+  function nudgeTrussPoint(dxNorm, dyNorm) {
+    if (selectedTrussPoint === null) return;
+    var n = cmToNorm(trussCm[selectedTrussPoint]);
+    n.x += dxNorm;
+    n.y += dyNorm;
+    updateTrussCmAt(selectedTrussPoint, normToCm(n));
+    setDirty(true);
+    updateTrussPanel();
+  }
+
   // Keyboard equivalent to dragging: nudge position with arrow keys,
-  // rotate with [ / ], once a fixture is selected.
+  // rotate with [ / ], once a fixture is selected. Truss-point keyboard
+  // editing is handled separately above and takes priority when a truss
+  // point (rather than a fixture) is selected — the two are mutually
+  // exclusive selections (req 1/2).
   canvas.addEventListener("keydown", function (evt) {
+    if (selectedTrussPoint !== null) {
+      handleTrussKeydown(evt);
+      return;
+    }
     if (!selectedFixture) return;
     var step = evt.shiftKey ? 0.03 : 0.01;
     var handled = true;
     switch (evt.key) {
-      case "ArrowUp": selectedFixture.y = clamp(selectedFixture.y - step, 0, 1); break;
-      case "ArrowDown": selectedFixture.y = clamp(selectedFixture.y + step, 0, 1); break;
-      case "ArrowLeft": selectedFixture.x = clamp(selectedFixture.x - step, 0, 1); break;
-      case "ArrowRight": selectedFixture.x = clamp(selectedFixture.x + step, 0, 1); break;
+      case "ArrowUp": selectedFixture.y = clamp(selectedFixture.y - step, 0, 1); setDirty(true); break;
+      case "ArrowDown": selectedFixture.y = clamp(selectedFixture.y + step, 0, 1); setDirty(true); break;
+      case "ArrowLeft": selectedFixture.x = clamp(selectedFixture.x - step, 0, 1); setDirty(true); break;
+      case "ArrowRight": selectedFixture.x = clamp(selectedFixture.x + step, 0, 1); setDirty(true); break;
       case "[":
         selectedFixture.rotation = normalizeDeg(selectedFixture.rotation - (evt.shiftKey ? 15 : 5));
         syncRotationUi();
+        setDirty(true);
         break;
       case "]":
         selectedFixture.rotation = normalizeDeg(selectedFixture.rotation + (evt.shiftKey ? 15 : 5));
         syncRotationUi();
+        setDirty(true);
         break;
       case "Escape": selectFixture(null); break;
       default: handled = false;
@@ -921,7 +1305,9 @@
   // ---------------------------------------------------------------------
   function drawTruss(points) {
     if (!points || points.length < 2) return;
-    var pts = points.map(function (p) { return project(p.x, p.y); });
+    // Unclamped projection (req D/8): a point dragged out of [0,1] must
+    // draw where it actually is, never pinned back to the stage edge.
+    var pts = projectTrussPoints(points);
     var RAIL_OFFSET = 5;
 
     function rail(sign) {
@@ -962,6 +1348,37 @@
     ctx.restore();
   }
 
+  // Small draggable handles at each truss vertex — only drawn when the
+  // truss is actually editable (frame_cm present, req F). The selected
+  // point is highlighted so req 1/10's "visually distinct" selection and
+  // live measurement panel have an on-stage anchor to match.
+  function drawTrussHandles(points) {
+    if (!trussEditable || !points || points.length === 0) return;
+    var pts = projectTrussPoints(points);
+    for (var i = 0; i < pts.length; i++) {
+      var isSel = selectedTrussPoint === i;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(pts[i].x, pts[i].y, isSel ? 7 : 5, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? "#5ad1ff" : "rgba(255,255,255,0.55)";
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = isSel ? "#e8e8ec" : "rgba(0,0,0,0.4)";
+      ctx.stroke();
+      ctx.restore();
+      if (isSel) {
+        ctx.save();
+        ctx.strokeStyle = "#5ad1ff";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(pts[i].x, pts[i].y, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
   function drawBackground() {
     var w = stageSize.width, h = stageSize.height;
     var grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -971,6 +1388,7 @@
     ctx.fillRect(0, 0, w, h);
 
     drawTruss(truss);
+    drawTrussHandles(truss);
 
     // stage floor suggestion
     var floorGrad = ctx.createRadialGradient(

@@ -15,6 +15,7 @@ from typer.testing import CliRunner, Result
 
 from rbxlight import cli, db, safety
 from rbxlight.preview import layout as preview_layout
+from rbxlight.venues import repo as venues_repo
 from tests.conftest import make_macro_db, make_user_db
 from tests.fixtures.macro_fixtures import (
     a_factory_macro,
@@ -1743,3 +1744,988 @@ class TestMissingWorkingCopyForVenueAwareCommands:
         assert result.exit_code != 0
         assert_no_unhandled_exception(result)
         assert "pull" in result.stdout.lower()
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight layout install <path>` — installs a layout file exported by the
+# offline visualizer's export/download button into a venue's saved-layout
+# location. Dry run by default; refuses invalid/mismatched/degenerate
+# files with an actionable message; reports BOTH fixture and stage/truss
+# changes; prompts before installing over fixtures no longer patched into
+# the target venue; atomic write, same venue-resolution and missing-
+# working-copy conventions as every other venue-aware command.
+# ---------------------------------------------------------------------------
+
+
+def _install_target_path(work_layout_dbs: dict) -> Path:
+    return preview_layout.layout_path_for_venue(
+        work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+    )
+
+
+def _current_fixtures(work_layout_dbs: dict) -> list[venues_repo.Fixture]:
+    conn = sqlite3.connect(work_layout_dbs["user_path"])
+    try:
+        return venues_repo.list_fixtures(conn, work_layout_dbs["venue_id"])
+    finally:
+        conn.close()
+
+
+def _moved_entries(
+    entries: tuple[preview_layout.LayoutEntry, ...], *, moved_fixture_id: int
+) -> tuple[preview_layout.LayoutEntry, ...]:
+    """Same entries, except `moved_fixture_id`'s position is nudged —
+    used to build an incoming export that differs from an existing saved
+    layout in exactly one fixture's position, nothing else."""
+    return tuple(
+        preview_layout.LayoutEntry(
+            fixture_id=entry.fixture_id,
+            x=0.02 if entry.fixture_id == moved_fixture_id else entry.x,
+            y=0.02 if entry.fixture_id == moved_fixture_id else entry.y,
+            label=entry.label,
+            kind=entry.kind,
+            rotation=entry.rotation,
+            pan_degrees=entry.pan_degrees,
+            tilt_degrees=entry.tilt_degrees,
+        )
+        for entry in entries
+    )
+
+
+class TestLayoutInstallCommand:
+    # -----------------------------------------------------------------
+    # Requirement 1: refuse a file that is not a valid saved layout.
+    # -----------------------------------------------------------------
+
+    def test_should_refuse_an_empty_file(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a completely empty exported file
+        export_path = tmp_path / "export.json"
+        export_path.write_text("", encoding="utf-8")
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused, non-zero exit, an actionable message, nothing written
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert not target_path.exists()
+
+    def test_should_refuse_a_file_that_is_not_valid_json(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a file that isn't parseable JSON at all
+        export_path = tmp_path / "export.json"
+        export_path.write_text("not json at all{", encoding="utf-8")
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused clearly, non-zero exit, nothing written
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert not target_path.exists()
+
+    def test_should_refuse_valid_json_missing_the_fields_a_saved_layout_requires(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: valid JSON, but not shaped like a saved layout at all
+        export_path = tmp_path / "export.json"
+        export_path.write_text(json.dumps({"foo": "bar"}), encoding="utf-8")
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused clearly, non-zero exit, nothing written
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert not target_path.exists()
+
+    def test_should_refuse_a_file_with_the_right_shape_but_wrong_types(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: "entries" present, but not a list of entry objects at all
+        export_path = tmp_path / "export.json"
+        export_path.write_text(
+            json.dumps({"venue_id": work_layout_dbs["venue_id"], "entries": "nope"}),
+            encoding="utf-8",
+        )
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused clearly, non-zero exit, nothing written
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert not target_path.exists()
+
+    # -----------------------------------------------------------------
+    # Requirement 2: refuse a venue mismatch, naming both venues.
+    # -----------------------------------------------------------------
+
+    def test_should_refuse_a_venue_mismatch_naming_both_venues(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an exported layout built for a different venue than the
+        # one being installed into
+        other_venue_id = 999999
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path,
+            preview_layout.RigLayout(venue_id=other_venue_id, entries=()),
+        )
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it into the real target venue
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused, naming BOTH the file's venue and the target venue
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert str(other_venue_id) in result.stdout
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+        assert not target_path.exists()
+
+    # -----------------------------------------------------------------
+    # Requirement 3: degenerate stage/truss geometry surfaces as an
+    # actionable message, not a traceback (existing loading-layer
+    # validation, just surfaced cleanly by this command).
+    # -----------------------------------------------------------------
+
+    def test_should_refuse_a_degenerate_truss_shape_with_an_actionable_message(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a file for the right venue, but a stage structure with
+        # only one vertex — cannot describe a polyline
+        export_path = tmp_path / "export.json"
+        export_path.write_text(
+            json.dumps(
+                {
+                    "venue_id": work_layout_dbs["venue_id"],
+                    "entries": [],
+                    "structure_cm": [[10.0, 20.0]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing it
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: refused with a clear, actionable message — not a traceback
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert (
+            "vertex" in result.stdout.lower() or "vertices" in result.stdout.lower()
+        )
+        assert not target_path.exists()
+
+    # -----------------------------------------------------------------
+    # Requirement 4: dry run by default.
+    # -----------------------------------------------------------------
+
+    def test_should_default_to_a_dry_run_and_explain_how_to_apply(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a valid export matching the target venue
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing without --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: told this was a preview, and how to apply
+        assert result.exit_code == 0
+        assert "dry run" in result.stdout.lower()
+        assert "--write" in result.stdout
+
+    def test_should_not_create_a_file_on_dry_run_first_time_install(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: no existing saved layout for this venue
+        target_path = _install_target_path(work_layout_dbs)
+        assert not target_path.exists()
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing without --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: still no file created
+        assert result.exit_code == 0
+        assert not target_path.exists()
+
+    def test_should_leave_an_existing_saved_layout_byte_for_byte_identical_on_dry_run(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout for this venue
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+        original_bytes = target_path.read_bytes()
+
+        # And: an incoming export that DIFFERS (fixture 1 moved)
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=_moved_entries(existing.entries, moved_fixture_id=1),
+            structure_cm=existing.structure_cm,
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing without --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: the saved layout on disk is completely untouched
+        assert result.exit_code == 0
+        assert target_path.read_bytes() == original_bytes
+
+    # -----------------------------------------------------------------
+    # Requirement 5: apply with --write.
+    # -----------------------------------------------------------------
+
+    def test_should_install_and_confirm_what_was_saved_and_where(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a valid export matching the target venue
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing with --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+        )
+
+        # Then: it succeeds, the file now exists, and the user is told
+        # what was saved and where
+        assert result.exit_code == 0
+        assert target_path.exists()
+        assert str(target_path) in result.stdout
+        assert preview_layout.load_layout(target_path) == incoming
+
+    # -----------------------------------------------------------------
+    # Requirement 6: report BOTH fixture and stage/truss changes.
+    # -----------------------------------------------------------------
+
+    def test_should_report_a_fixture_only_change(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+
+        # And: an incoming export with the SAME truss but fixture 1 moved
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=_moved_entries(existing.entries, moved_fixture_id=1),
+            structure_cm=existing.structure_cm,
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing (dry run is enough — this is a reporting concern)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: the changed fixture is named, and this is NOT "no changes"
+        assert result.exit_code == 0
+        assert "LM70S #1" in result.stdout
+        assert "no changes" not in result.stdout.lower()
+
+    def test_should_report_a_truss_only_change_even_when_every_fixture_is_identical(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout with the default arch structure
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+
+        # And: an incoming export with IDENTICAL fixtures but a different
+        # stage/truss shape
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=existing.entries,
+            structure_cm=((0.0, 0.0), (500.0, 0.0)),
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing (dry run)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: a truss/stage-shape change is reported — this must NOT be
+        # treated as "nothing changed" just because every fixture matches
+        assert result.exit_code == 0
+        assert "no changes" not in result.stdout.lower()
+        assert (
+            "truss" in result.stdout.lower()
+            or "structure" in result.stdout.lower()
+            or "stage" in result.stdout.lower()
+        )
+
+    def test_should_report_both_fixture_and_truss_changes_together(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+
+        # And: an incoming export with BOTH a moved fixture AND a
+        # different truss shape
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=_moved_entries(existing.entries, moved_fixture_id=1),
+            structure_cm=((0.0, 0.0), (500.0, 0.0)),
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing (dry run)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: both kinds of change are surfaced
+        assert result.exit_code == 0
+        assert "LM70S #1" in result.stdout
+        assert (
+            "truss" in result.stdout.lower()
+            or "structure" in result.stdout.lower()
+            or "stage" in result.stdout.lower()
+        )
+
+    def test_should_report_no_changes_when_incoming_matches_the_saved_layout_exactly(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+
+        # And: an incoming export that is IDENTICAL in every way
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, existing)
+
+        # When: installing (dry run)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: clearly reported as no changes
+        assert result.exit_code == 0
+        assert "no changes" in result.stdout.lower()
+
+    def test_should_apply_harmlessly_when_incoming_is_identical_to_the_saved_layout(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an existing saved layout, and an identical incoming export
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, existing)
+        original_bytes = target_path.read_bytes()
+
+        # When: applying with --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+        )
+
+        # Then: harmless — succeeds, and the file's content is unchanged
+        assert result.exit_code == 0
+        assert target_path.read_bytes() == original_bytes
+
+    # -----------------------------------------------------------------
+    # Requirement 7: first-time install is reported as new, not an edit.
+    # -----------------------------------------------------------------
+
+    def test_should_make_clear_a_first_time_install_is_a_new_file_not_an_edit(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: no existing saved layout for this venue
+        target_path = _install_target_path(work_layout_dbs)
+        assert not target_path.exists()
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing (dry run is enough — this is a reporting concern)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: distinctly reported as new, never as "no changes"
+        assert result.exit_code == 0
+        assert "no changes" not in result.stdout.lower()
+        assert "new" in result.stdout.lower()
+
+    def test_should_install_successfully_on_first_time_with_write_flag(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: no existing saved layout, and the --write flag
+        target_path = _install_target_path(work_layout_dbs)
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing with --write
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+        )
+
+        # Then: the new file now exists, matching the incoming layout
+        assert result.exit_code == 0
+        assert target_path.exists()
+        assert preview_layout.load_layout(target_path) == incoming
+
+    # -----------------------------------------------------------------
+    # Requirement 8: prompt when the incoming layout references fixtures
+    # no longer patched into the target venue; skippable non-interactively.
+    # -----------------------------------------------------------------
+
+    def test_should_prompt_when_incoming_references_fixtures_no_longer_patched(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an incoming export referencing a fixture id that no
+        # longer exists in the venue's current patch
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=(
+                preview_layout.LayoutEntry(
+                    fixture_id=999, x=0.5, y=0.5, label="Ghost Fixture", kind="par"
+                ),
+            ),
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing with --write, declining the prompt
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+            input="n\n",
+        )
+
+        # Then: the missing fixture is named, nothing was written, and
+        # this is a clean exit — cancelling is not an error
+        assert result.exit_code == 0
+        assert "999" in result.stdout or "Ghost Fixture" in result.stdout
+        assert not target_path.exists()
+
+    def test_should_proceed_when_the_missing_fixture_prompt_is_confirmed(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: the same missing-fixture scenario
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=(
+                preview_layout.LayoutEntry(
+                    fixture_id=999, x=0.5, y=0.5, label="Ghost Fixture", kind="par"
+                ),
+            ),
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing with --write, confirming the prompt
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+            input="y\n",
+        )
+
+        # Then: it proceeds and writes the file
+        assert result.exit_code == 0
+        assert target_path.exists()
+
+    def test_should_skip_the_missing_fixture_prompt_with_the_yes_flag(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: the same missing-fixture scenario
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=(
+                preview_layout.LayoutEntry(
+                    fixture_id=999, x=0.5, y=0.5, label="Ghost Fixture", kind="par"
+                ),
+            ),
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+        target_path = _install_target_path(work_layout_dbs)
+
+        # When: installing with --write --yes, and NO input available at all
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+                "--yes",
+            ],
+        )
+
+        # Then: it proceeds without prompting
+        assert result.exit_code == 0
+        assert target_path.exists()
+
+    # -----------------------------------------------------------------
+    # Requirement 9: venue resolution follows the same rules as every
+    # other venue-aware command.
+    # -----------------------------------------------------------------
+
+    def test_should_use_the_explicit_venue_when_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a venue that is not the active one
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        user_path = make_user_db(work_dir / "user.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        user_conn = sqlite3.connect(user_path)
+        a_venue(user_conn, venue_id=7, name="Explicit Venue")
+        a_par_fixture(user_conn, fixture_id=1, venue_id=7)
+        user_conn.close()
+
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path, preview_layout.RigLayout(venue_id=7, entries=())
+        )
+
+        # When: installing with an explicit --venue, no ExecVenueId set
+        result = runner.invoke(
+            cli.app, ["layout", "install", str(export_path), "--venue", "7"]
+        )
+
+        # Then: it succeeds against the explicitly named venue
+        assert result.exit_code == 0
+        assert "7" in result.stdout
+        assert "Explicit Venue" in result.stdout
+        assert "explicit" in result.stdout.lower()
+
+    def test_should_confirm_the_active_venue_used_when_venue_is_omitted(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: no --venue flag, but lighting_property.ExecVenueId is set
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        # When: installing without --venue
+        result = runner.invoke(cli.app, ["layout", "install", str(export_path)])
+
+        # Then: it succeeds and confirms the active-venue fallback was used
+        assert result.exit_code == 0
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+        assert "active venue" in result.stdout.lower()
+
+    def test_should_fail_clearly_when_no_venue_given_and_none_is_active(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy with no ExecVenueId set
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        make_user_db(work_dir / "user.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path, preview_layout.RigLayout(venue_id=1, entries=())
+        )
+
+        # When: installing with no --venue
+        result = runner.invoke(cli.app, ["layout", "install", str(export_path)])
+
+        # Then: a clear, handled failure
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "no active venue" in result.stdout.lower()
+        assert "--venue" in result.stdout
+
+    def test_should_fail_clearly_when_the_active_venue_pointer_is_stale(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: ExecVenueId is overwritten to point at a venue that no
+        # longer exists (the real venue from work_layout_dbs still does)
+        user_conn = sqlite3.connect(work_layout_dbs["user_path"])
+        set_lighting_property(user_conn, "ExecVenueId", "999999")
+        user_conn.close()
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path, preview_layout.RigLayout(venue_id=999999, entries=())
+        )
+
+        # When: installing with no --venue
+        result = runner.invoke(cli.app, ["layout", "install", str(export_path)])
+
+        # Then: a distinct, clean failure naming the stale id and
+        # enumerating the still-valid venues
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "999999" in result.stdout
+        assert (
+            "no longer exist" in result.stdout.lower()
+            or "stale" in result.stdout.lower()
+        )
+        assert str(work_layout_dbs["venue_id"]) in result.stdout
+        assert ACTIVE_VENUE_NAME in result.stdout
+
+    # -----------------------------------------------------------------
+    # Requirement 10: missing working copy points at `pull`, not a raw
+    # database error.
+    # -----------------------------------------------------------------
+
+    def test_should_tell_the_user_to_pull_first_when_the_working_copy_is_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: WORK_DIR points at a directory with no user.db3 at all
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path, preview_layout.RigLayout(venue_id=1, entries=())
+        )
+
+        # When: installing
+        result = runner.invoke(
+            cli.app, ["layout", "install", str(export_path), "--venue", "1"]
+        )
+
+        # Then: a clear, handled failure telling the user to pull first
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "pull" in result.stdout.lower()
+
+    # -----------------------------------------------------------------
+    # Requirement 11: the write is atomic.
+    # -----------------------------------------------------------------
+
+    def test_should_leave_the_existing_saved_layout_untouched_when_write_is_interrupted(
+        self, work_layout_dbs: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: an existing saved layout
+        existing = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        target_path = _install_target_path(work_layout_dbs)
+        preview_layout.save_layout(target_path, existing)
+        original_bytes = target_path.read_bytes()
+
+        # And: an incoming export that differs
+        incoming = preview_layout.RigLayout(
+            venue_id=work_layout_dbs["venue_id"],
+            entries=_moved_entries(existing.entries, moved_fixture_id=1),
+            structure_cm=existing.structure_cm,
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated crash during install write")
+
+        monkeypatch.setattr("os.replace", _boom)
+
+        # When: installing with --write, interrupted mid-write
+        runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+        )
+
+        # Then: the previously saved layout is completely untouched
+        assert target_path.read_bytes() == original_bytes
+
+    def test_should_leave_no_file_behind_when_a_first_time_install_write_is_interrupted(
+        self, work_layout_dbs: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: no existing saved layout for this venue at all
+        target_path = _install_target_path(work_layout_dbs)
+        assert not target_path.exists()
+        incoming = preview_layout.generate_layout(
+            work_layout_dbs["venue_id"], _current_fixtures(work_layout_dbs)
+        )
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(export_path, incoming)
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated crash during install write")
+
+        monkeypatch.setattr("os.replace", _boom)
+
+        # When: the very first install is interrupted mid-write
+        runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+                "--write",
+            ],
+        )
+
+        # Then: no truncated/corrupt file was left behind
+        assert not target_path.exists()
+
+    # -----------------------------------------------------------------
+    # Other edge cases.
+    # -----------------------------------------------------------------
+
+    def test_should_handle_a_file_with_zero_fixture_entries(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: a valid export for the right venue with no fixture entries
+        export_path = tmp_path / "export.json"
+        preview_layout.save_layout(
+            export_path,
+            preview_layout.RigLayout(
+                venue_id=work_layout_dbs["venue_id"], entries=()
+            ),
+        )
+
+        # When: installing (dry run)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: no crash
+        assert result.exit_code == 0
+
+    def test_should_load_safely_when_the_export_omits_stage_geometry_entirely(
+        self, work_layout_dbs: dict, tmp_path: Path
+    ) -> None:
+        # Given: an older-format export with no "structure_cm" key at all
+        export_path = tmp_path / "export.json"
+        export_path.write_text(
+            json.dumps({"venue_id": work_layout_dbs["venue_id"], "entries": []}),
+            encoding="utf-8",
+        )
+
+        # When: installing (dry run)
+        result = runner.invoke(
+            cli.app,
+            [
+                "layout",
+                "install",
+                str(export_path),
+                "--venue",
+                str(work_layout_dbs["venue_id"]),
+            ],
+        )
+
+        # Then: it loads safely via the existing defaulting, no crash
+        assert result.exit_code == 0

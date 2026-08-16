@@ -2331,3 +2331,140 @@ class TestLoadLayoutStructureValidation:
         # Then: it loads successfully with the saved shape intact
         assert loaded is not None
         assert loaded.structure_cm == ((0.0, 0.0), (500.0, 0.0))
+
+
+# ---------------------------------------------------------------------------
+# load_layout_file — reading an ARBITRARY exported layout file (e.g. one
+# produced by the offline visualizer's export/download button), as opposed
+# to load_layout's venue-keyed "may simply not exist yet" contract. Backs
+# the `rbxlight layout install` command: refuses unparseable/incomplete
+# files with a typed, actionable error rather than a bare KeyError/
+# JSONDecodeError traceback. Degenerate stage geometry still raises the
+# existing DegenerateStructureError unchanged — this is the same
+# validation layer load_layout already goes through, not a new rule.
+# ---------------------------------------------------------------------------
+
+
+class TestLoadLayoutFile:
+    def test_should_raise_for_a_file_that_is_not_valid_json(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a file that isn't parseable JSON at all
+        path = tmp_path / "export.json"
+        path.write_text("not valid json{", encoding="utf-8")
+
+        # When / Then: a typed, actionable error — not a bare JSONDecodeError
+        with pytest.raises(layout.InvalidSavedLayoutError):
+            layout.load_layout_file(path)
+
+    def test_should_raise_for_an_empty_file(self, tmp_path: Path) -> None:
+        # Given: a completely empty file
+        path = tmp_path / "export.json"
+        path.write_text("", encoding="utf-8")
+
+        # When / Then: a typed, actionable error
+        with pytest.raises(layout.InvalidSavedLayoutError):
+            layout.load_layout_file(path)
+
+    def test_should_raise_when_required_fields_are_missing(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: valid JSON that isn't shaped like a saved layout at all
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps({"foo": "bar"}), encoding="utf-8")
+
+        # When / Then: a typed, actionable error
+        with pytest.raises(layout.InvalidSavedLayoutError):
+            layout.load_layout_file(path)
+
+    def test_should_raise_when_a_required_field_has_the_wrong_type(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: the right top-level keys, but "entries" is not a list
+        # of entry objects at all
+        path = tmp_path / "export.json"
+        path.write_text(
+            json.dumps({"venue_id": 2, "entries": "not-a-list"}), encoding="utf-8"
+        )
+
+        # When / Then: a typed, actionable error — not a bare TypeError
+        with pytest.raises(layout.InvalidSavedLayoutError):
+            layout.load_layout_file(path)
+
+    def test_should_name_the_problem_in_the_error_message(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: an unparseable file
+        path = tmp_path / "export.json"
+        path.write_text("{not json", encoding="utf-8")
+
+        # When
+        with pytest.raises(layout.InvalidSavedLayoutError) as exc_info:
+            layout.load_layout_file(path)
+
+        # Then: a non-empty, actionable message — matching the project's
+        # existing load-time domain error convention
+        assert str(exc_info.value)
+
+    def test_should_still_raise_degenerate_structure_error_for_bad_geometry(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: an otherwise well-formed file whose stage geometry is
+        # degenerate — this is the EXISTING validation layer, unchanged,
+        # not re-wrapped as InvalidSavedLayoutError
+        path = tmp_path / "export.json"
+        path.write_text(
+            json.dumps(
+                {"venue_id": 2, "entries": [], "structure_cm": [[1.0, 1.0]]}
+            ),
+            encoding="utf-8",
+        )
+
+        # When / Then: the same typed error load_layout already raises
+        with pytest.raises(layout.DegenerateStructureError):
+            layout.load_layout_file(path)
+
+    def test_should_return_a_rig_layout_for_a_valid_file(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a real, validly saved layout file
+        original = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(fixture_id=1, x=0.5, y=0.5, label="X", kind="par"),
+            ),
+        )
+        path = tmp_path / "export.json"
+        layout.save_layout(path, original)
+
+        # When: loading it
+        loaded = layout.load_layout_file(path)
+
+        # Then: an equivalent RigLayout comes back
+        assert loaded == original
+
+    def test_should_load_safely_when_stage_geometry_is_omitted_entirely(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: an older-format export with no "structure_cm" key at all
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps({"venue_id": 2, "entries": []}), encoding="utf-8")
+
+        # When: loading it (must not crash on the missing key)
+        loaded = layout.load_layout_file(path)
+
+        # Then: the standard default arch is used, same as load_layout
+        assert loaded.structure_cm == layout.arch_outline_cm()
+
+    def test_should_load_a_file_with_zero_fixture_entries(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a structurally valid file with no fixtures at all
+        path = tmp_path / "export.json"
+        path.write_text(json.dumps({"venue_id": 2, "entries": []}), encoding="utf-8")
+
+        # When: loading it
+        loaded = layout.load_layout_file(path)
+
+        # Then: it loads successfully with an empty entry set
+        assert loaded.entries == ()

@@ -63,6 +63,11 @@ SKY_Y: float = 0.0
 #: Fraction of the normalized [0, 1] range reserved as margin on every
 #: side, so nothing lands exactly on the 0/1 edge (which would clip in a
 #: renderer).
+#:
+#: Mirrored in JavaScript as TRUSS_MARGIN_FRACTION in template.html, which
+#: inverts this margin reservation and the y-axis flip in _normalize_point
+#: to recover real-world centimetres. Change one without the other and
+#: structure_cm exports silently corrupted coordinates — no crash, no test.
 _MARGIN_FRACTION: float = 0.05
 
 #: Ground clearance + spacing for pars standing outside the arch footprint.
@@ -171,6 +176,21 @@ class NormalizationFrame:
     max_x: float
     min_y: float
     max_y: float
+
+
+def frame_cm_to_dict(frame: NormalizationFrame | None) -> dict | None:
+    """JSON-serializable representation of a NormalizationFrame, or None.
+    Shared by `layout_to_dict` and `preview.payload.build_preview_payload`
+    — `frame_cm` is mirrored verbatim in both, never recomputed.
+    """
+    if frame is None:
+        return None
+    return {
+        "min_x": frame.min_x,
+        "max_x": frame.max_x,
+        "min_y": frame.min_y,
+        "max_y": frame.max_y,
+    }
 
 
 @dataclass(frozen=True)
@@ -749,6 +769,53 @@ def save_layout(path: Path, layout: RigLayout) -> None:
         raise
 
 
+class InvalidSavedLayoutError(ValueError):
+    """Raised by `load_layout_file` when a file that is expected to
+    already be a saved layout export cannot be parsed as one: invalid
+    JSON, missing required fields, or a required field with the wrong
+    type. Degenerate stage/truss geometry is a distinct, already-typed
+    failure mode (`DegenerateStructureError`) and is never wrapped by
+    this one.
+    """
+
+
+def load_layout_file(path: Path) -> RigLayout:
+    """Load a layout file expected to already exist — e.g. a file
+    exported by the offline visualizer for `layout install`.
+
+    Unlike `load_layout` (which treats a missing file as the normal
+    "never generated yet" case and returns None), any failure to parse
+    `path` as a well-formed saved layout raises InvalidSavedLayoutError
+    with an actionable message. `DegenerateStructureError` from
+    `layout_from_dict`'s structure validation propagates unchanged, not
+    wrapped.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise InvalidSavedLayoutError(f"could not read {path}: {exc}") from exc
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise InvalidSavedLayoutError(f"{path} is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise InvalidSavedLayoutError(
+            f"{path} must contain a JSON object describing a saved layout, "
+            f"got {type(data).__name__}."
+        )
+
+    try:
+        return layout_from_dict(data)
+    except DegenerateStructureError:
+        raise
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise InvalidSavedLayoutError(
+            f"{path} is not a valid saved layout: {exc}"
+        ) from exc
+
+
 def ensure_layout(
     path: Path, venue_id: int, fixtures: Sequence[Fixture]
 ) -> LayoutMergeResult:
@@ -829,16 +896,7 @@ def layout_to_dict(layout: RigLayout) -> dict:
             for entry in layout.entries
         ],
         "structure_cm": [list(point) for point in layout.structure_cm],
-        "frame_cm": (
-            {
-                "min_x": layout.frame_cm.min_x,
-                "max_x": layout.frame_cm.max_x,
-                "min_y": layout.frame_cm.min_y,
-                "max_y": layout.frame_cm.max_y,
-            }
-            if layout.frame_cm is not None
-            else None
-        ),
+        "frame_cm": frame_cm_to_dict(layout.frame_cm),
     }
 
 

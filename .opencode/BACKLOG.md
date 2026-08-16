@@ -18,6 +18,18 @@ Raw ideas and future work. Items here need refinement before development.
   the wrong way in practice, the default should become 270° rather than the user re-editing it forever.
   Needs one visual confirmation against the real rig.
 
+- [ ] **The normalization margin is a magic constant mirrored in two languages**
+  `_MARGIN_FRACTION = 0.05` in `preview/layout.py` is duplicated as `TRUSS_MARGIN_FRACTION = 0.05` in
+  `preview/template.html`, because the browser has to invert this module's normalization (margin +
+  y-flip) to show centimetres and export `structure_cm`. Change one without the other and the
+  visualizer silently exports wrong real-world measurements — no crash, no failing test, the polyline
+  is still well-formed and the CLI accepts it. Guarded for now by cross-referencing comments on both
+  sides (2026-08-16), which is a convention, not a mechanism. The real fix is to ship the margin in
+  the preview payload so there is one source of truth; deferred because it reopens the strict
+  payload-key-set test that the truss-editing story had just settled. Precedent exists either way —
+  `DEFAULT_PAN_DEGREES`/`DEFAULT_TILT_DEGREES` are already mirrored — but those are defaults, and a
+  wrong default is visible while a wrong measurement is not.
+
 ---
 
 ## Epic: CLI completeness
@@ -63,10 +75,13 @@ Raw ideas and future work. Items here need refinement before development.
    fixtures were normalized against *different* bounding boxes (the renderer hid this with a
    stretch hack that would have started corrupting non-arch shapes), and `_normalize_point` had a
    divide-by-zero that made a flat truss uncrashable-in-theory only because no one could save one.
-3. `MULTI_VENUE-truss-editing-in-visualizer` (M) — draw/edit truss as a polyline, plus a CLI install
-   command that ends the download→manually-move-the-file chore. Depends on 2. **Now unblocked.**
-   Note that `calibrateTrussX()` no longer exists in `template.html` — the truss arrives already
-   correctly normalized in the payload's shared frame and is drawn as-is.
+3. ~~`MULTI_VENUE-truss-editing-in-visualizer` (M)~~ — **BUILT 2026-08-16.** Truss points are now
+   selectable, draggable, insertable and deletable in the visualizer with real centimetre readouts,
+   and `rbxlight layout install` closes the loop back into the tool. The story claimed a
+   recalibration hack still needed removing — it had already gone in story 2. The real find was that
+   the browser had neither truss export nor centimetres at all, and that inverting this project's
+   normalization requires the 5% margin *and* the y-flip: without both, pressing Download with zero
+   edits exported a corrupted-but-well-formed polyline that the CLI accepts without complaint.
 
 Decisions taken during refinement: auto-placement stays (generic, along the truss run) rather than
 hand-placing 27 fixtures; truss is stored in **cm**, not normalized, so rig scale survives; truss is

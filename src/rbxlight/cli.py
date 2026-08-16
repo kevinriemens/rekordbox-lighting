@@ -154,6 +154,58 @@ def _resolve_venue_and_fixtures(
     return venue_obj, venues_repo.list_fixtures(user_conn, venue_id), source
 
 
+#: User-facing dry-run gate message — a tested contract, identical across
+#: every mutating command.
+_DRY_RUN_NOTICE = "This is a dry run — nothing was changed. Pass --write to apply."
+
+
+def _resolve_and_announce_venue(
+    venue: int | None,
+) -> tuple[venues_repo.Venue, list[venues_repo.Fixture]]:
+    """Resolve venue (see _resolve_venue_and_fixtures) against the
+    working copy and announce the selection. Shared by every
+    venue-aware layout command.
+    """
+    with _readonly_working_copy(_USER_DB_NAME) as user_conn:
+        venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
+    _announce_venue_selection(venue_obj, source)
+    return venue_obj, fixtures
+
+
+def _layout_path(venue_id: int) -> Path:
+    return preview_layout.layout_path_for_venue(venue_id, db.WORK_DIR / "layouts")
+
+
+def _load_existing_layout(layout_path: Path) -> preview_layout.RigLayout | None:
+    """load_layout() only reads — never ensure_layout(), which writes as
+    a side effect of loading and would break a dry-run command's
+    dry-run guarantee.
+    """
+    return preview_layout.load_layout(layout_path)
+
+
+def _print_layout_diff_entry(diff: preview_layout.LayoutDiffEntry) -> None:
+    """Render one LayoutDiffEntry: new, removed, or changed. Shared by
+    `layout regenerate` and `layout install` — the "removed" case never
+    fires for regenerate (its diff is always old-present vs fresh, and
+    fresh covers every currently patched fixture), but the format is
+    identical wherever it does apply.
+    """
+    if diff.old_x is None:
+        typer.echo(
+            f"New: {diff.label} (id={diff.fixture_id}) -> "
+            f"({diff.new_x:.3f}, {diff.new_y:.3f}) @ {diff.new_rotation:.3f}."
+        )
+    elif diff.new_x is None:
+        typer.echo(f"Removed: {diff.label} (id={diff.fixture_id}).")
+    else:
+        typer.echo(
+            f"{diff.label} (id={diff.fixture_id}): "
+            f"({diff.old_x:.3f}, {diff.old_y:.3f}) @ {diff.old_rotation:.3f} -> "
+            f"({diff.new_x:.3f}, {diff.new_y:.3f}) @ {diff.new_rotation:.3f}"
+        )
+
+
 @macro_app.command("create")
 def macro_create(
     name: str,
@@ -168,7 +220,7 @@ def macro_create(
     )
 
     if not write:
-        typer.echo("This is a dry run — nothing was changed. Pass --write to apply.")
+        typer.echo(_DRY_RUN_NOTICE)
         return
 
     with _working_copy_write(_MACRO_DB_NAME) as conn:
@@ -203,7 +255,7 @@ def macro_delete(
     )
 
     if not write:
-        typer.echo("This is a dry run — nothing was changed. Pass --write to apply.")
+        typer.echo(_DRY_RUN_NOTICE)
         return
 
     try:
@@ -243,9 +295,7 @@ def preview(
             venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
             venue_id = venue_obj.id
             _announce_venue_selection(venue_obj, source)
-            layout_path = preview_layout.layout_path_for_venue(
-                venue_id, db.WORK_DIR / "layouts"
-            )
+            layout_path = _layout_path(venue_id)
             merge_result = preview_layout.ensure_layout(layout_path, venue_id, fixtures)
 
             result = preview_payload.build_preview_payload(
@@ -308,7 +358,7 @@ def push(
     if not write:
         names = ", ".join(sync.SYNCED_DB_NAMES)
         typer.echo(f"Plan: push {names} from {db.WORK_DIR} to {db.LIGHTINGDB}.")
-        typer.echo("This is a dry run — nothing was changed. Pass --write to apply.")
+        typer.echo(_DRY_RUN_NOTICE)
         return
 
     trigger_command = "rbxlight push --write" + (" --force" if force else "")
@@ -424,21 +474,12 @@ def layout_regenerate(
     the default arch. Dry run by default — never writes the saved layout
     file unless --write is given.
     """
-    with _readonly_working_copy(_USER_DB_NAME) as user_conn:
-        venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
-
+    venue_obj, fixtures = _resolve_and_announce_venue(venue)
     venue_id = venue_obj.id
-    _announce_venue_selection(venue_obj, source)
 
     fixture_ids = {fixture.id for fixture in fixtures}
-    layout_path = preview_layout.layout_path_for_venue(
-        venue_id, db.WORK_DIR / "layouts"
-    )
-
-    # NOTE: load_layout() only reads — never use ensure_layout() here, it
-    # writes the file as a side effect of loading, which would break the
-    # dry-run guarantee below.
-    existing = preview_layout.load_layout(layout_path)
+    layout_path = _layout_path(venue_id)
+    existing = _load_existing_layout(layout_path)
 
     # Structure geometry is user-owned data, the same category as pan/tilt
     # calibration — never reset to the default arch unless explicitly
@@ -475,27 +516,105 @@ def layout_regenerate(
     diffs = preview_layout.diff_layouts(old_present, fresh)
 
     for diff in diffs:
-        if diff.old_x is None:
-            typer.echo(
-                f"New: {diff.label} (id={diff.fixture_id}) -> "
-                f"({diff.new_x:.3f}, {diff.new_y:.3f}) @ {diff.new_rotation:.3f}."
-            )
-        else:
-            typer.echo(
-                f"{diff.label} (id={diff.fixture_id}): "
-                f"({diff.old_x:.3f}, {diff.old_y:.3f}) @ {diff.old_rotation:.3f} -> "
-                f"({diff.new_x:.3f}, {diff.new_y:.3f}) @ {diff.new_rotation:.3f}"
-            )
+        _print_layout_diff_entry(diff)
 
     unchanged_count = len(fixture_ids) - len(diffs)
     typer.echo(f"{unchanged_count} fixture(s) unchanged.")
 
     if not write:
-        typer.echo("This is a dry run — nothing was changed. Pass --write to apply.")
+        typer.echo(_DRY_RUN_NOTICE)
         return
 
     merged_layout = preview_layout.apply_prior_calibration(fresh, old_present_entries)
     preview_layout.save_layout(layout_path, merged_layout)
+    typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
+
+
+# ---------------------------------------------------------------------------
+# layout install — install a layout file exported by the offline
+# visualizer as the saved layout for a venue. The export shares the
+# saved-layout file's exact shape; the normalization frame is carried
+# through unchanged, never recomputed (see preview.layout,
+# NormalizationFrame).
+# ---------------------------------------------------------------------------
+
+
+@layout_app.command("install")
+def layout_install(
+    path: Path,
+    venue: int = typer.Option(
+        None,
+        "--venue",
+        help="Venue id. Defaults to the active venue (lighting_property.ExecVenueId).",
+    ),
+    write: bool = typer.Option(
+        False, "--write", help="Apply the change. Default is a dry run."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt."),
+) -> None:
+    """Install a layout file exported by the offline visualizer as the
+    saved layout for `venue`. Reports both fixture-placement and
+    stage/truss changes against any existing saved layout; a first-time
+    install is reported distinctly rather than diffed. Dry run by
+    default — never writes the saved layout file unless --write is given.
+    """
+    venue_obj, fixtures = _resolve_and_announce_venue(venue)
+    venue_id = venue_obj.id
+
+    try:
+        incoming = preview_layout.load_layout_file(path)
+    except (
+        preview_layout.InvalidSavedLayoutError,
+        preview_layout.DegenerateStructureError,
+    ) as exc:
+        typer.echo(f"Refused: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if incoming.venue_id != venue_id:
+        typer.echo(
+            f"Refused: {path} is a layout for venue {incoming.venue_id}, but "
+            f"the target is venue {venue_id} ({venue_obj.name})."
+        )
+        raise typer.Exit(code=1)
+
+    fixture_ids = {fixture.id for fixture in fixtures}
+    labels_by_id = {entry.fixture_id: entry.label for entry in incoming.entries}
+    missing_fixture_ids = sorted(
+        fixture_id for fixture_id in labels_by_id if fixture_id not in fixture_ids
+    )
+    for missing_id in missing_fixture_ids:
+        typer.echo(
+            f"No longer patched into venue {venue_id}: "
+            f"{labels_by_id[missing_id]} (id={missing_id})."
+        )
+
+    layout_path = _layout_path(venue_id)
+    existing = _load_existing_layout(layout_path)
+
+    if existing is None:
+        typer.echo("New file — no existing saved layout for this venue.")
+    else:
+        fixture_diffs = preview_layout.diff_layouts(existing, incoming)
+        structure_changed = existing.structure_cm != incoming.structure_cm
+
+        for diff in fixture_diffs:
+            _print_layout_diff_entry(diff)
+
+        if structure_changed:
+            typer.echo("Structure/truss: changed.")
+
+        if not fixture_diffs and not structure_changed:
+            typer.echo("No changes.")
+
+    if not write:
+        typer.echo(_DRY_RUN_NOTICE)
+        return
+
+    if missing_fixture_ids and not yes and not typer.confirm("Proceed anyway?"):
+        typer.echo("Cancelled — nothing was written.")
+        return
+
+    preview_layout.save_layout(layout_path, incoming)
     typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
 
 
