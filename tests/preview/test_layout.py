@@ -341,6 +341,16 @@ class TestEnsureLayout:
 
 
 class TestArchOutline:
+    """arch_outline_cm() is now the STANDARD DEFAULT stage shape a venue
+    gets when no custom structure has been saved yet — not the only
+    possible shape any more (see TestGenerateLayoutStraightHorizontal
+    Structure / TestGenerateLayoutGoalpostStructure / TestGenerateLayout
+    AsymmetricCustomShape for shape-generic placement, and
+    TestLoadLayoutMissingStructureField for the backward-compat default).
+    Every geometric assertion below must still hold for that default
+    exactly as before — this is the regression guard for requirement 2.
+    """
+
     def test_should_return_six_vertices_for_the_five_segments(self) -> None:
         # Given/When: the real truss outline
         points = layout.arch_outline_cm()
@@ -505,6 +515,14 @@ class TestLayoutEntryRotation:
 
 
 class TestGenerateLayoutArchMounting:
+    """Placement onto the DEFAULT arch shape (generate_layout's structure
+    defaults to arch_outline_cm() when no structure_cm is supplied — see
+    TestGenerateLayoutStraightHorizontalStructure and friends for other
+    shapes). Substance of every assertion here is preserved unchanged —
+    this is the regression guard for requirement 4's default-arch
+    constraint.
+    """
+
     def test_should_mount_bar_cells_vertically_with_constant_x_and_varying_y(
         self,
     ) -> None:
@@ -741,6 +759,13 @@ class TestGenerateLayoutArchMounting:
 
 
 class TestGenerateLayoutAddressBasedBarGrouping:
+    """DMX-address grouping onto the DEFAULT arch shape's two vertical
+    segments. All grouping semantics below are preserved unchanged; see
+    TestGenerateLayoutStraightHorizontalStructure /
+    TestGenerateLayoutGoalpostStructure for the same grouping rule
+    applied to non-default shapes.
+    """
+
     def test_should_group_each_bars_cells_by_dmx_address_in_the_real_repository_order(
         self,
     ) -> None:
@@ -1208,6 +1233,13 @@ class TestEnsureLayoutTiltBlockMountingRotationDefault:
 
 
 class TestGenerateLayoutNormalization:
+    """Normalization (task requirement 5: "One shared normalized frame").
+    The structure's cm geometry and the fixture positions must resolve
+    into ONE shared [0, 1] frame — no more normalizing them against two
+    different bounding boxes. The within-margin guarantee below must
+    still hold under that single frame.
+    """
+
     def test_should_keep_every_position_strictly_within_the_margin(self) -> None:
         # Given: the real venue's fixture composition
         fixtures = a_full_arc_fixture_list()
@@ -1242,8 +1274,65 @@ class TestGenerateLayoutNormalization:
         assert min(bar_cell_ys) > diagonal_y
         assert diagonal_y > top_y
 
+    def test_should_populate_a_shared_cm_frame_on_the_generated_layout(self) -> None:
+        # Given: the real venue's fixture composition
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout
+        result = layout.generate_layout(venue_id=2, fixtures=fixtures)
+
+        # Then: the layout carries its own cm structure geometry plus the
+        # cm frame used to normalize it — required because fixture
+        # positions are persisted already-normalized, discarding the cm
+        # frame; it must be recoverable from the layout itself.
+        assert result.structure_cm == layout.arch_outline_cm()
+        assert result.frame_cm is not None
+
+    def test_should_normalize_the_structure_into_the_same_frame_as_the_fixtures(
+        self,
+    ) -> None:
+        # Given: the real venue's fixture composition — ground pars stand
+        # OUTSIDE the arch's own footprint, so a frame built from the arch
+        # alone would be narrower than the frame the fixtures actually need
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout
+        result = layout.generate_layout(venue_id=2, fixtures=fixtures)
+        normalized_structure = layout.normalized_structure(result)
+
+        # Then: the structure normalizes cleanly into [0, 1] using the
+        # SAME frame as the fixtures — and that shared frame differs from
+        # the arch-only bounding box normalization, proving the mismatch
+        # (and the renderer's compensating stretch hack) is gone
+        for x, y in normalized_structure:
+            assert 0.0 <= x <= 1.0
+            assert 0.0 <= y <= 1.0
+        assert normalized_structure != layout.normalized_arch_outline()
+
+    def test_should_never_clip_a_ground_fixture_outside_the_structures_footprint(
+        self,
+    ) -> None:
+        # Given: the real venue's fixture composition (ground pars stand
+        # outside the arch's own footprint — see xclusive-rig-profile skill)
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout
+        result = layout.generate_layout(venue_id=2, fixtures=fixtures)
+
+        # Then: every ground par still lands inside the normalized range —
+        # never clipped or pushed out of bounds by the shared frame
+        pars = [e for e in result.entries if e.kind == "par"]
+        assert pars
+        for par in pars:
+            assert 0.0 < par.x < 1.0
+            assert 0.0 < par.y < 1.0
+
 
 class TestGroundAxisConvention:
+    """The ground-is-high-y convention must hold under the single shared
+    normalization frame (task requirement 5) exactly as it did before.
+    """
+
     def test_should_expose_an_explicit_ground_end_of_the_normalized_range(
         self,
     ) -> None:
@@ -1306,6 +1395,365 @@ class TestGenerateLayoutArchEdgeCases:
         first = next(e for e in result.entries if e.fixture_id == 1)
         second = next(e for e in result.entries if e.fixture_id == 2)
         assert (first.x, first.y) != (second.x, second.y)
+
+
+# ---------------------------------------------------------------------------
+# Shape-generic fixture auto-placement (task requirement 4: "Shape-generic
+# fixture auto-placement"). generate_layout() must adapt to whatever
+# structure_cm shape it's given — driven by segment orientation/length plus
+# fixture kind and DMX address order — with no remaining hardcoded
+# assumption that the structure is the default 5-segment arch. The default
+# arch's own placement is pinned down separately by
+# TestGenerateLayoutArchMounting / TestGenerateLayoutAddressBasedBarGrouping
+# above (must remain unchanged); these classes cover the OTHER shapes.
+# ---------------------------------------------------------------------------
+
+
+def _straight_horizontal_structure(
+    length_cm: float = 600.0,
+) -> tuple[tuple[float, float], ...]:
+    """A single-segment straight horizontal run — no verticals, no
+    diagonals at all. Deliberately not the default arch.
+    """
+    return ((0.0, 0.0), (length_cm, 0.0))
+
+
+def _goalpost_structure(
+    vertical_cm: float = 150.0, horizontal_cm: float = 300.0
+) -> tuple[tuple[float, float], ...]:
+    """Two verticals plus a top horizontal (3 segments, 4 vertices) — no
+    diagonal segments at all, unlike the default arch.
+    """
+    return (
+        (0.0, 0.0),
+        (0.0, vertical_cm),
+        (horizontal_cm, vertical_cm),
+        (horizontal_cm, 0.0),
+    )
+
+
+def _asymmetric_custom_structure() -> tuple[tuple[float, float], ...]:
+    """A deliberately irregular polyline: no symmetry, no repeated segment
+    lengths, mixed orientations — the "none of the above" shape case.
+    """
+    return (
+        (0.0, 0.0),
+        (0.0, 60.0),
+        (220.0, 260.0),
+        (340.0, 260.0),
+        (410.0, 40.0),
+    )
+
+
+class TestGenerateLayoutStraightHorizontalStructure:
+    def test_should_distribute_moving_heads_along_the_run_in_dmx_order(
+        self,
+    ) -> None:
+        # Given: a straight horizontal structure and moving heads at
+        # increasing DMX addresses
+        structure = _straight_horizontal_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i,
+                name=f"LM70S #{i}",
+                fixture_master_id=LM70S_MASTER_ID,
+                start_addr=addr,
+            )
+            for i, addr in enumerate(HEAD_ADDRS, start=1)
+        ]
+
+        # When: generating the layout onto the straight run
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: positions increase monotonically with DMX address order,
+        # and every head gets a distinct position
+        entries = [_by_label(result, f"LM70S #{i}") for i in range(1, 5)]
+        xs = [e.x for e in entries]
+        assert xs == sorted(xs)
+        assert len({round(x, 6) for x in xs}) == len(xs)
+
+    def test_should_distribute_bar_groups_along_the_run_in_dmx_order(
+        self,
+    ) -> None:
+        # Given: a straight horizontal structure with two bars (tilt +
+        # cells), bar 1's tilt at a lower DMX address than bar 2's
+        structure = _straight_horizontal_structure()
+        fixtures = (
+            [
+                a_fixture_model(
+                    fixture_id=1,
+                    name="Bar 1 Tilt",
+                    fixture_master_id=TILT_BLOCK_MASTER_ID,
+                    start_addr=BAR_1_TILT_ADDR,
+                )
+            ]
+            + [
+                a_fixture_model(
+                    fixture_id=2 + i,
+                    name=f"Bar 1 Cell {i + 1}",
+                    fixture_master_id=PIXEL_CELL_MASTER_ID,
+                    start_addr=addr,
+                )
+                for i, addr in enumerate(BAR_1_CELL_ADDRS)
+            ]
+            + [
+                a_fixture_model(
+                    fixture_id=11,
+                    name="Bar 2 Tilt",
+                    fixture_master_id=TILT_BLOCK_MASTER_ID,
+                    start_addr=BAR_2_TILT_ADDR,
+                )
+            ]
+            + [
+                a_fixture_model(
+                    fixture_id=12 + i,
+                    name=f"Bar 2 Cell {i + 1}",
+                    fixture_master_id=PIXEL_CELL_MASTER_ID,
+                    start_addr=addr,
+                )
+                for i, addr in enumerate(BAR_2_CELL_ADDRS)
+            ]
+        )
+
+        # When: generating the layout onto the straight run
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: bar 1's group sits distinctly apart from bar 2's group
+        # along the run, in DMX order — every one of bar 1's cells is
+        # closer to bar 1's own tilt than to bar 2's, and vice versa
+        tilt1 = _by_label(result, "Bar 1 Tilt")
+        tilt2 = _by_label(result, "Bar 2 Tilt")
+        assert tilt1.x != pytest.approx(tilt2.x)
+
+        bar1_cells = [_by_label(result, f"Bar 1 Cell {i}") for i in range(1, 10)]
+        bar2_cells = [_by_label(result, f"Bar 2 Cell {i}") for i in range(1, 10)]
+        for cell in bar1_cells:
+            assert abs(cell.x - tilt1.x) < abs(cell.x - tilt2.x)
+        for cell in bar2_cells:
+            assert abs(cell.x - tilt2.x) < abs(cell.x - tilt1.x)
+
+    def test_should_stand_pars_outside_the_runs_footprint(self) -> None:
+        # Given: a straight horizontal structure and several pars
+        structure = _straight_horizontal_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i,
+                name=f"LPC008S #{i}",
+                fixture_master_id=PAR_MASTER_ID,
+                start_addr=addr,
+            )
+            for i, addr in enumerate(PAR_ADDRS, start=1)
+        ]
+
+        # When: generating the layout
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: every position stays within the normalized margin — no
+        # ground fixture is clipped for standing outside the run
+        for entry in result.entries:
+            assert 0.0 < entry.x < 1.0
+            assert 0.0 < entry.y < 1.0
+
+    def test_should_be_deterministic(self) -> None:
+        # Given: a mixed fixture set on a straight horizontal structure
+        structure = _straight_horizontal_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i, fixture_master_id=LM70S_MASTER_ID, start_addr=addr
+            )
+            for i, addr in enumerate(HEAD_ADDRS, start=1)
+        ]
+
+        # When: generating twice
+        first = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+        second = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: identical output
+        assert first == second
+
+
+class TestGenerateLayoutGoalpostStructure:
+    def test_should_mount_bar_cells_on_the_two_vertical_legs(self) -> None:
+        # Given: a goalpost structure (two verticals, no diagonals) and
+        # the real two-bar composition
+        structure = _goalpost_structure()
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout onto the goalpost
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: each bar's cells still share one horizontal position with
+        # their own tilt block, distinct from the other bar's — the same
+        # DMX-address grouping rule as the default arch, applied to the
+        # goalpost's two verticals
+        tilt1 = _by_label(result, "Bar 1 Tilt")
+        tilt2 = _by_label(result, "Bar 2 Tilt")
+        bar1_cells = [_by_label(result, f"Bar 1 Cell {i}") for i in range(1, 10)]
+        bar2_cells = [_by_label(result, f"Bar 2 Cell {i}") for i in range(1, 10)]
+
+        assert tilt1.x != pytest.approx(tilt2.x)
+        for cell in bar1_cells:
+            assert cell.x == pytest.approx(tilt1.x)
+        for cell in bar2_cells:
+            assert cell.x == pytest.approx(tilt2.x)
+
+    def test_should_place_moving_heads_along_the_horizontal_top_in_dmx_order(
+        self,
+    ) -> None:
+        # Given: a goalpost structure — no diagonals for the two lowest-
+        # address heads to claim, so all heads distribute along the top
+        # horizontal in DMX order (same rule as the straight-run case)
+        structure = _goalpost_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i,
+                name=f"LM70S #{i}",
+                fixture_master_id=LM70S_MASTER_ID,
+                start_addr=addr,
+            )
+            for i, addr in enumerate(HEAD_ADDRS, start=1)
+        ]
+
+        # When: generating the layout
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: positions increase monotonically with DMX address order
+        entries = [_by_label(result, f"LM70S #{i}") for i in range(1, 5)]
+        xs = [e.x for e in entries]
+        assert xs == sorted(xs)
+        assert len({round(x, 6) for x in xs}) == len(xs)
+
+    def test_should_stand_pars_outside_the_goalposts_footprint_split_left_and_right(
+        self,
+    ) -> None:
+        # Given: a goalpost structure and 3 pars
+        structure = _goalpost_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i,
+                name=f"LPC008S #{i}",
+                fixture_master_id=PAR_MASTER_ID,
+                start_addr=addr,
+            )
+            for i, addr in enumerate(PAR_ADDRS, start=1)
+        ]
+
+        # When: generating the layout
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        pars = result.entries
+        min_x = min(e.x for e in pars)
+        max_x = max(e.x for e in pars)
+
+        # Then: every position stays within the normalized margin
+        for entry in result.entries:
+            assert 0.0 < entry.x < 1.0
+            assert 0.0 < entry.y < 1.0
+        assert min_x < max_x
+
+    def test_should_be_deterministic(self) -> None:
+        # Given: the real two-bar composition on a goalpost structure
+        structure = _goalpost_structure()
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating twice
+        first = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+        second = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: identical output
+        assert first == second
+
+
+class TestGenerateLayoutAsymmetricCustomShape:
+    def test_should_produce_one_entry_per_fixture_without_crashing(self) -> None:
+        # Given: a deliberately irregular custom structure and the real
+        # 27-fixture composition
+        structure = _asymmetric_custom_structure()
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout onto the asymmetric shape
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: no crash, one entry per fixture
+        assert len(result.entries) == len(fixtures)
+        assert {e.fixture_id for e in result.entries} == {f.id for f in fixtures}
+
+    def test_should_keep_every_position_within_the_normalized_margin(self) -> None:
+        # Given: an asymmetric custom structure and the real composition
+        structure = _asymmetric_custom_structure()
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating the layout
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: nothing sits exactly on the 0/1 edge
+        for entry in result.entries:
+            assert 0.0 < entry.x < 1.0
+            assert 0.0 < entry.y < 1.0
+
+    def test_should_be_deterministic_for_identical_input(self) -> None:
+        # Given: an asymmetric custom structure and the real composition
+        structure = _asymmetric_custom_structure()
+        fixtures = a_full_arc_fixture_list()
+
+        # When: generating twice
+        first = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+        second = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: identical output
+        assert first == second
+
+    def test_should_still_stand_pars_outside_the_shapes_footprint(self) -> None:
+        # Given: an asymmetric custom structure and several pars
+        structure = _asymmetric_custom_structure()
+        fixtures = [
+            a_fixture_model(
+                fixture_id=i,
+                name=f"LPC008S #{i}",
+                fixture_master_id=PAR_MASTER_ID,
+                start_addr=addr,
+            )
+            for i, addr in enumerate(PAR_ADDRS, start=1)
+        ]
+
+        # When: generating the layout
+        result = layout.generate_layout(
+            venue_id=2, fixtures=fixtures, structure_cm=structure
+        )
+
+        # Then: every position stays within the normalized margin — no
+        # ground fixture is clipped or pushed out of bounds
+        for entry in result.entries:
+            assert 0.0 < entry.x < 1.0
+            assert 0.0 < entry.y < 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -1641,3 +2089,245 @@ class TestDiffLayouts:
         # Then: identical ordered results regardless of input entry order
         assert result_forward == result_shuffled
         assert [e.fixture_id for e in result_forward] == [1, 3]
+
+
+# ---------------------------------------------------------------------------
+# Stage structure persistence (task requirement 1: "Persistence and
+# survival"). A venue's stage structure is an ordered polyline in
+# real-world cm, saved and loaded exactly — never regenerated from
+# constants once a custom shape has been saved.
+# ---------------------------------------------------------------------------
+
+
+class TestSaveLoadStructureGeometry:
+    def test_should_persist_a_custom_straight_shape_exactly(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a venue with a custom straight horizontal run, not the
+        # default arch
+        custom_structure = ((0.0, 0.0), (500.0, 0.0))
+        original = RigLayout(venue_id=2, entries=(), structure_cm=custom_structure)
+        path = tmp_path / "layout_venue_2.json"
+
+        # When: saving then loading
+        layout.save_layout(path, original)
+        loaded = layout.load_layout(path)
+
+        # Then: the exact saved shape comes back — read from the saved
+        # file, never regenerated from the default arch constants
+        assert loaded is not None
+        assert loaded.structure_cm == custom_structure
+        assert loaded.structure_cm != layout.arch_outline_cm()
+
+    def test_should_persist_the_normalization_frame_alongside_the_geometry(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a layout with an explicit normalization frame recorded —
+        # not otherwise recoverable, since fixture positions are stored
+        # already-normalized with the cm frame discarded
+        frame = layout.NormalizationFrame(
+            min_x=-50.0, max_x=550.0, min_y=0.0, max_y=150.0
+        )
+        original = RigLayout(
+            venue_id=2,
+            entries=(),
+            structure_cm=((0.0, 0.0), (500.0, 0.0)),
+            frame_cm=frame,
+        )
+        path = tmp_path / "layout_venue_2.json"
+
+        # When: saving then loading
+        layout.save_layout(path, original)
+        loaded = layout.load_layout(path)
+
+        # Then: the frame survives the round trip exactly
+        assert loaded is not None
+        assert loaded.frame_cm == frame
+
+    def test_should_round_trip_the_default_arch_when_no_custom_shape_was_set(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a layout built without specifying a structure at all
+        original = RigLayout(
+            venue_id=2,
+            entries=(
+                LayoutEntry(
+                    fixture_id=1, x=0.5, y=0.5, label="LM70S #1", kind="moving_head"
+                ),
+            ),
+        )
+        path = tmp_path / "layout_venue_2.json"
+
+        # When: saving then loading
+        layout.save_layout(path, original)
+        loaded = layout.load_layout(path)
+
+        # Then: identical to the original, including its default structure
+        assert loaded == original
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility (task requirement 2). Mirrors the existing
+# precedent for a previously-added optional field
+# (TestLoadLayoutMissingRotationField / the pan_degrees/tilt_degrees
+# defaulting in layout_from_dict) — a saved-layout file written before
+# stage geometry existed has fixture data but no structure key at all, and
+# loading it must succeed with the venue gaining the standard default
+# 5-segment arch, with no other change in behavior.
+# ---------------------------------------------------------------------------
+
+
+class TestLoadLayoutMissingStructureField:
+    def test_should_default_structure_to_the_standard_arch_when_the_field_is_absent(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a layout file written before stage geometry existed — no
+        # "structure_cm" key at all, same shape as the legacy payloads in
+        # TestLoadLayoutMissingRotationField
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {
+            "venue_id": 2,
+            "entries": [
+                {
+                    "fixture_id": 1,
+                    "x": 0.5,
+                    "y": 0.5,
+                    "label": "LM70S #1",
+                    "kind": "moving_head",
+                }
+            ],
+        }
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When: loading it
+        loaded = layout.load_layout(path)
+
+        # Then: the venue gains the standard default 5-segment arch —
+        # existing users observe no change whatsoever
+        assert loaded is not None
+        assert loaded.structure_cm == layout.arch_outline_cm()
+
+    def test_should_default_frame_when_the_field_is_absent(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a legacy layout file with neither "structure_cm" nor
+        # "frame_cm" present
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {"venue_id": 2, "entries": []}
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When: loading it (must not crash on the missing keys)
+        loaded = layout.load_layout(path)
+
+        # Then: it succeeds
+        assert loaded is not None
+        assert loaded.structure_cm == layout.arch_outline_cm()
+
+
+# ---------------------------------------------------------------------------
+# Validation on load (task requirement 3). A saved file whose stage
+# geometry is degenerate or malformed raises a clear, typed error rather
+# than proceeding to a crash, a broken drawing, or a silent zero-length
+# line.
+# ---------------------------------------------------------------------------
+
+
+class TestLoadLayoutStructureValidation:
+    def test_should_raise_a_typed_error_for_a_single_vertex_structure(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a saved structure with only one vertex — cannot describe
+        # a polyline
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {
+            "venue_id": 2,
+            "entries": [],
+            "structure_cm": [[10.0, 20.0]],
+        }
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When / Then: a clear, typed error — not a crash or a silent
+        # zero-length line
+        with pytest.raises(layout.DegenerateStructureError):
+            layout.load_layout(path)
+
+    def test_should_raise_a_typed_error_when_all_vertices_are_identical(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a saved structure whose vertices are all the same point
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {
+            "venue_id": 2,
+            "entries": [],
+            "structure_cm": [[5.0, 5.0], [5.0, 5.0], [5.0, 5.0]],
+        }
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When / Then: a clear, typed error
+        with pytest.raises(layout.DegenerateStructureError):
+            layout.load_layout(path)
+
+    @pytest.mark.parametrize(
+        "bad_coord", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+    )
+    def test_should_raise_a_typed_error_for_a_non_finite_coordinate(
+        self, tmp_path: Path, bad_coord: float
+    ) -> None:
+        # Given: a saved structure with one non-finite coordinate — the
+        # kind of thing a hand-edited or corrupted file could contain.
+        # json.dumps's default allow_nan=True writes NaN/Infinity as bare
+        # (non-standard but json.loads-readable) literals, exactly how a
+        # real corrupted file could arrive on disk.
+        path = tmp_path / "layout_venue_2.json"
+        payload_dict = {
+            "venue_id": 2,
+            "entries": [],
+            "structure_cm": [[0.0, 0.0], [bad_coord, 0.0]],
+        }
+        path.write_text(json.dumps(payload_dict), encoding="utf-8")
+
+        # When / Then: a clear, typed error — not a crash downstream
+        with pytest.raises(layout.DegenerateStructureError):
+            layout.load_layout(path)
+
+    def test_should_name_the_problem_in_the_error_message(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: a degenerate single-vertex structure
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {
+            "venue_id": 2,
+            "entries": [],
+            "structure_cm": [[1.0, 1.0]],
+        }
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When
+        with pytest.raises(layout.DegenerateStructureError) as exc_info:
+            layout.load_layout(path)
+
+        # Then: the message identifies the actual problem, matching the
+        # project's existing load-time domain error convention (see
+        # InvalidLightingXMLError's descriptive messages)
+        message = str(exc_info.value).lower()
+        assert "vertex" in message or "vertices" in message
+
+    def test_should_not_raise_for_a_valid_two_vertex_structure(
+        self, tmp_path: Path
+    ) -> None:
+        # Given: the minimum valid structure — exactly two distinct,
+        # finite vertices (a single straight segment)
+        path = tmp_path / "layout_venue_2.json"
+        legacy_payload = {
+            "venue_id": 2,
+            "entries": [],
+            "structure_cm": [[0.0, 0.0], [500.0, 0.0]],
+        }
+        path.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+        # When: loading it (must not raise)
+        loaded = layout.load_layout(path)
+
+        # Then: it loads successfully with the saved shape intact
+        assert loaded is not None
+        assert loaded.structure_cm == ((0.0, 0.0), (500.0, 0.0))

@@ -63,6 +63,12 @@ src/rbxlight/
   phrases/
     repo.py          content + phrase_data read/write
     assign.py        bulk macro_pattern_id rebalance, phrase reassignment
+  preview/
+    layout.py        stage geometry, fixture placement, normalization, layout JSON persistence
+    payload.py       assembles the visualizer payload from macro + venue + layout
+    extract.py       macro XML -> per-beat brightness/colour/movement
+    document.py      renders the self-contained offline HTML
+    template.html    vanilla-JS visualizer — zero external refs, no build step
 tests/
   conftest.py        fixtures building throwaway temp DBs
   ...                mirrors src layout
@@ -92,7 +98,25 @@ Keep it this flat. This is a personal tool for one rig — no plugin system, no 
 | Venue, fixture, or patch logic | `venues/repo.py` (storage) or `venues/builder.py` (generation) |
 | Track/phrase macro assignment | `phrases/repo.py` (storage) or `phrases/assign.py` (bulk logic) |
 | Colour math (ARGB <-> hex/rgb) | `colors.py` |
+| Stage/truss geometry, fixture auto-placement, layout file persistence | `preview/layout.py` |
+| Visualizer payload shape | `preview/payload.py` |
+| Anything the visualizer draws or how it draws it | `preview/template.html` |
 | New domain type | `models.py` — plain dataclass, no behavior beyond simple derived properties |
+
+### `preview/layout.py` is the one deliberate exception to flatness
+
+It owns five concerns at once — stage geometry, segment classification, fixture placement,
+normalization, and layout JSON persistence — and is the largest module in the project (~900 lines).
+That is intentional under the flat rule, not an oversight: the concerns share one coordinate system
+and splitting them would spread a single invariant across four files.
+
+Two things to know before changing it:
+
+- **Layout files are the tool's own data, not rekordbox's.** They live in `work/layouts/layout_venue_{id}.json`.
+  Truss geometry in particular is this tool's concept and must never be written into any `.db3`.
+- **Everything in it is pure** — no DB access, no live-path resolution. `save_layout`/`load_layout`
+  are the only I/O, and `save_layout`'s atomic temp-file-plus-`os.replace` is a hard guarantee with
+  dedicated tests. Do not introduce a DB read into geometry or placement to "look something up".
 
 ## Key Patterns
 

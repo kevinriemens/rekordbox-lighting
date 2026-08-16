@@ -1320,6 +1320,190 @@ class TestLayoutRegenerateCommand:
             f"new rotation {new_rotation} missing from: {fixture_line!r}"
         )
 
+    # -----------------------------------------------------------------
+    # Structure geometry is user-owned (task requirement 6). Regeneration
+    # must preserve the saved structure unchanged by default — the same
+    # category as pan/tilt calibration, never the algorithm-owned
+    # position/rotation/label/kind — and only reset it to the default
+    # arch when the user explicitly opts in.
+    # -----------------------------------------------------------------
+
+    def test_should_preserve_a_custom_saved_structure_by_default(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: a saved layout with a custom, non-default structure —
+        # user-owned geometry, same category as pan/tilt calibration
+        layout_path = preview_layout.layout_path_for_venue(
+            work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+        )
+        custom_structure = ((0.0, 0.0), (600.0, 0.0))
+        preview_layout.save_layout(
+            layout_path,
+            preview_layout.RigLayout(
+                venue_id=work_layout_dbs["venue_id"],
+                entries=(),
+                structure_cm=custom_structure,
+            ),
+        )
+
+        # When: regenerating with --write, no reset flag
+        result = runner.invoke(cli.app, ["layout", "regenerate", "--write"])
+
+        # Then: the custom structure survives exactly — never silently
+        # reset to the default arch
+        assert result.exit_code == 0
+        regenerated = preview_layout.load_layout(layout_path)
+        assert regenerated is not None
+        assert regenerated.structure_cm == custom_structure
+        assert "preserved" in result.stdout.lower()
+
+    def test_should_never_reset_the_structure_without_the_explicit_flag(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: a saved custom structure
+        layout_path = preview_layout.layout_path_for_venue(
+            work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+        )
+        custom_structure = ((0.0, 0.0), (600.0, 0.0))
+        preview_layout.save_layout(
+            layout_path,
+            preview_layout.RigLayout(
+                venue_id=work_layout_dbs["venue_id"],
+                entries=(),
+                structure_cm=custom_structure,
+            ),
+        )
+
+        # When: regenerating repeatedly with --write, never passing the
+        # reset flag
+        runner.invoke(cli.app, ["layout", "regenerate", "--write"])
+        result = runner.invoke(cli.app, ["layout", "regenerate", "--write"])
+
+        # Then: still the custom shape, never the default arch
+        assert result.exit_code == 0
+        regenerated = preview_layout.load_layout(layout_path)
+        assert regenerated is not None
+        assert regenerated.structure_cm == custom_structure
+        assert regenerated.structure_cm != preview_layout.arch_outline_cm()
+
+    def test_should_reset_the_structure_to_the_default_arch_when_the_flag_is_given(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: a saved custom structure
+        layout_path = preview_layout.layout_path_for_venue(
+            work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+        )
+        custom_structure = ((0.0, 0.0), (600.0, 0.0))
+        preview_layout.save_layout(
+            layout_path,
+            preview_layout.RigLayout(
+                venue_id=work_layout_dbs["venue_id"],
+                entries=(),
+                structure_cm=custom_structure,
+            ),
+        )
+
+        # When: regenerating with the explicit reset flag
+        result = runner.invoke(
+            cli.app, ["layout", "regenerate", "--reset-structure", "--write"]
+        )
+
+        # Then: the structure is now the standard default arch, and the
+        # output clearly, distinguishably reports the reset
+        assert result.exit_code == 0
+        regenerated = preview_layout.load_layout(layout_path)
+        assert regenerated is not None
+        assert regenerated.structure_cm == preview_layout.arch_outline_cm()
+        assert "regenerated" in result.stdout.lower()
+        assert "default" in result.stdout.lower()
+
+    def test_should_not_reset_the_structure_on_a_dry_run_even_with_the_flag(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: a saved custom structure
+        layout_path = preview_layout.layout_path_for_venue(
+            work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+        )
+        custom_structure = ((0.0, 0.0), (600.0, 0.0))
+        preview_layout.save_layout(
+            layout_path,
+            preview_layout.RigLayout(
+                venue_id=work_layout_dbs["venue_id"],
+                entries=(),
+                structure_cm=custom_structure,
+            ),
+        )
+        original_bytes = layout_path.read_bytes()
+
+        # When: passing --reset-structure WITHOUT --write
+        result = runner.invoke(cli.app, ["layout", "regenerate", "--reset-structure"])
+
+        # Then: still a dry run — nothing on disk changes regardless of
+        # the reset flag
+        assert result.exit_code == 0
+        assert layout_path.read_bytes() == original_bytes
+
+    def test_should_report_structure_status_on_a_fresh_first_regeneration(
+        self, work_layout_dbs: dict
+    ) -> None:
+        # Given: no layout file has ever been generated for this venue
+        layout_path = preview_layout.layout_path_for_venue(
+            work_layout_dbs["venue_id"], work_layout_dbs["work_dir"] / "layouts"
+        )
+        assert not layout_path.exists()
+
+        # When: regenerating for the first time
+        result = runner.invoke(cli.app, ["layout", "regenerate", "--write"])
+
+        # Then: it succeeds and clearly reports the structure's status
+        assert result.exit_code == 0
+        assert "structure" in result.stdout.lower()
+
+    def test_should_never_leak_one_venues_structure_into_another_venues_saved_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: two venues, each with its own saved custom structure
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        user_path = make_user_db(work_dir / "user.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        user_conn = sqlite3.connect(user_path)
+        venue_a = a_venue(user_conn, venue_id=2, name="Venue A")
+        a_par_fixture(user_conn, fixture_id=1, venue_id=venue_a)
+        venue_b = a_venue(user_conn, venue_id=3, name="Venue B")
+        a_par_fixture(user_conn, fixture_id=2, venue_id=venue_b, macro_fixture_id=2)
+        user_conn.close()
+
+        layouts_dir = work_dir / "layouts"
+        layout_path_a = preview_layout.layout_path_for_venue(venue_a, layouts_dir)
+        layout_path_b = preview_layout.layout_path_for_venue(venue_b, layouts_dir)
+
+        custom_a = ((0.0, 0.0), (300.0, 0.0))
+        custom_b = ((0.0, 0.0), (0.0, 150.0), (200.0, 150.0), (200.0, 0.0))
+        preview_layout.save_layout(
+            layout_path_a,
+            preview_layout.RigLayout(venue_id=venue_a, entries=(), structure_cm=custom_a),
+        )
+        preview_layout.save_layout(
+            layout_path_b,
+            preview_layout.RigLayout(venue_id=venue_b, entries=(), structure_cm=custom_b),
+        )
+        b_original_bytes = layout_path_b.read_bytes()
+
+        # When: regenerating venue A only
+        result = runner.invoke(
+            cli.app, ["layout", "regenerate", "--venue", str(venue_a), "--write"]
+        )
+
+        # Then: venue A's own structure survives untouched, and venue B's
+        # saved file is byte-for-byte untouched — no leakage between venues
+        assert result.exit_code == 0
+        reloaded_a = preview_layout.load_layout(layout_path_a)
+        assert reloaded_a is not None
+        assert reloaded_a.structure_cm == custom_a
+        assert layout_path_b.read_bytes() == b_original_bytes
+
 
 # ---------------------------------------------------------------------------
 # `rbxlight venue list` — read-only venue discovery. Never mutates a

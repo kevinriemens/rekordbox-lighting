@@ -357,3 +357,53 @@ class TestBuildPreviewPayload:
 
         # Then: it succeeds — no write was ever attempted
         assert result["macro"]["id"] == macro_id
+
+    def test_should_normalize_the_truss_into_the_same_frame_as_fixture_positions(
+        self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
+    ) -> None:
+        # Given: a venue whose fixtures extend beyond the structure's own
+        # footprint (ground pars stand outside the arch — see task
+        # requirement 5, "One shared normalized frame")
+        macro_id = a_user_macro(macro_db_conn, macro_id=10008)
+        venue_id = a_small_full_arc_venue(user_db_conn)
+        rig_layout = _layout_for(user_db_conn, venue_id)
+
+        # When: building the payload
+        result = payload.build_preview_payload(
+            macro_db_conn, user_db_conn, macro_id, venue_id, rig_layout
+        )
+
+        # Then: the truss is normalized through the SAME shared frame the
+        # layout used for its own fixtures — no separate, mismatched
+        # bounding box, no renderer-side correction required
+        expected_truss = tuple(
+            tuple(point) for point in layout.normalized_structure(rig_layout)
+        )
+        actual_truss = tuple(tuple(point) for point in result["truss"])
+        assert actual_truss == expected_truss
+
+    def test_should_keep_the_payload_shape_unchanged_by_the_shared_frame_change(
+        self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
+    ) -> None:
+        # Given: a fully built payload
+        macro_id = a_user_macro(macro_db_conn, macro_id=10008)
+        venue_id = a_small_full_arc_venue(user_db_conn)
+        rig_layout = _layout_for(user_db_conn, venue_id)
+
+        # When: building the payload
+        result = payload.build_preview_payload(
+            macro_db_conn, user_db_conn, macro_id, venue_id, rig_layout
+        )
+
+        # Then: same top-level keys and value shapes as before — only the
+        # source/correctness of "truss" changed, not the JSON contract.
+        # "truss" stays a sequence of (x, y) pairs of real numbers; the
+        # exact Python container type (list vs tuple) isn't the contract,
+        # JSON serializability of that shape is.
+        assert set(result.keys()) == {"macro", "venue", "bpm", "truss", "fixtures"}
+        for point in result["truss"]:
+            assert len(point) == 2
+            assert isinstance(point[0], (int, float))
+            assert isinstance(point[1], (int, float))
+        serialized = json.dumps(result, allow_nan=False)
+        assert isinstance(serialized, str)

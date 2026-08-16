@@ -30,6 +30,13 @@ Raw ideas and future work. Items here need refinement before development.
   exists and respects factory-immutability, so this is:
   `pull` → `macro delete 10007 --write` → `macro delete 10008 --write` → `push --write`.
 
+- [ ] **`preview/layout.py` is 897 lines and holds five concerns**
+  Geometry, segment classification, fixture placement, normalization and JSON persistence all live
+  in one module. The optimizer declined to split it on 2026-08-16, correctly, since the architecture
+  skill mandates a flat structure — but this is the single largest file in the project and the
+  truss-editing story will add to it. Worth deciding whether the flat rule has an upper bound before
+  it grows again, rather than after.
+
 - [ ] **Pretty-print generated XML**
   rekordbox writes 2-space-indented `LightingEditModel` payloads; ours are compact single-line.
   rekordbox accepts both — verified live — so this is purely for humans diffing YAML/XML exports.
@@ -43,10 +50,17 @@ Raw ideas and future work. Items here need refinement before development.
 1. ~~`MULTI_VENUE-venue-discovery-and-selection` (S)~~ — **BUILT 2026-08-15.** Shipped as more than
    discovery: `layout regenerate` turned out to never validate the venue at all, so a bad or stale
    `--venue` silently exited 0. Both venue-aware commands now share one resolver.
-2. `MULTI_VENUE-per-venue-stage-description` (L) — truss geometry becomes persisted per-venue data
-   in cm; fixture auto-placement stops assuming the arch shape.
+2. ~~`MULTI_VENUE-per-venue-stage-description` (L)~~ — **BUILT 2026-08-16.** Truss is now a saved
+   per-venue cm polyline with its normalization frame persisted alongside it, and placement is
+   segment-role based rather than arch-shaped. The refinement's own diagnosis was right — the
+   hardcode was the placement algorithm, not the constants. Two things it missed: the truss and the
+   fixtures were normalized against *different* bounding boxes (the renderer hid this with a
+   stretch hack that would have started corrupting non-arch shapes), and `_normalize_point` had a
+   divide-by-zero that made a flat truss uncrashable-in-theory only because no one could save one.
 3. `MULTI_VENUE-truss-editing-in-visualizer` (M) — draw/edit truss as a polyline, plus a CLI install
-   command that ends the download→manually-move-the-file chore. Depends on 2.
+   command that ends the download→manually-move-the-file chore. Depends on 2. **Now unblocked.**
+   Note that `calibrateTrussX()` no longer exists in `template.html` — the truss arrives already
+   correctly normalized in the payload's shared frame and is drawn as-is.
 
 Decisions taken during refinement: auto-placement stays (generic, along the truss run) rather than
 hand-placing 27 fixtures; truss is stored in **cm**, not normalized, so rig scale survives; truss is

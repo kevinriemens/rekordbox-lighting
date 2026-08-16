@@ -409,12 +409,20 @@ def layout_regenerate(
     write: bool = typer.Option(
         False, "--write", help="Apply the change. Default is a dry run."
     ),
+    reset_structure: bool = typer.Option(
+        False,
+        "--reset-structure",
+        help="Reset the saved stage structure back to the default arch. "
+        "Without this flag, a saved custom structure is never reset.",
+    ),
 ) -> None:
     """Regenerate a venue's rig layout from the current algorithm and diff
     it against the saved layout. Position, rotation, label, and kind
     always come from the fresh generation; pan/tilt sweep calibration is
-    preserved for every fixture that still exists. Dry run by default —
-    never writes the saved layout file unless --write is given.
+    preserved for every fixture that still exists — and so is the saved
+    stage structure, unless --reset-structure opts into replacing it with
+    the default arch. Dry run by default — never writes the saved layout
+    file unless --write is given.
     """
     with _readonly_working_copy(_USER_DB_NAME) as user_conn:
         venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
@@ -431,7 +439,22 @@ def layout_regenerate(
     # writes the file as a side effect of loading, which would break the
     # dry-run guarantee below.
     existing = preview_layout.load_layout(layout_path)
-    fresh = preview_layout.generate_layout(venue_id, fixtures)
+
+    # Structure geometry is user-owned data, the same category as pan/tilt
+    # calibration — never reset to the default arch unless explicitly
+    # requested. Reported via its own status line, separate from the
+    # per-fixture diff below.
+    if reset_structure:
+        target_structure = preview_layout.arch_outline_cm()
+        typer.echo("Structure: regenerated to the default arch.")
+    elif existing is not None:
+        target_structure = existing.structure_cm
+        typer.echo("Structure: preserved (saved shape unchanged).")
+    else:
+        target_structure = None
+        typer.echo("Structure: no previous layout — using the default arch.")
+
+    fresh = preview_layout.generate_layout(venue_id, fixtures, target_structure)
 
     existing_entries = existing.entries if existing is not None else ()
     old_present_entries = tuple(
@@ -471,23 +494,7 @@ def layout_regenerate(
         typer.echo("This is a dry run — nothing was changed. Pass --write to apply.")
         return
 
-    old_present_by_id = {entry.fixture_id: entry for entry in old_present_entries}
-    merged_entries = tuple(
-        preview_layout.LayoutEntry(
-            fixture_id=entry.fixture_id,
-            x=entry.x,
-            y=entry.y,
-            label=entry.label,
-            kind=entry.kind,
-            rotation=entry.rotation,
-            pan_degrees=prior.pan_degrees,
-            tilt_degrees=prior.tilt_degrees,
-        )
-        if (prior := old_present_by_id.get(entry.fixture_id)) is not None
-        else entry
-        for entry in fresh.entries
-    )
-    merged_layout = preview_layout.RigLayout(venue_id=venue_id, entries=merged_entries)
+    merged_layout = preview_layout.apply_prior_calibration(fresh, old_present_entries)
     preview_layout.save_layout(layout_path, merged_layout)
     typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
 

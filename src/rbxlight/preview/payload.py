@@ -12,7 +12,7 @@ import sqlite3
 
 from rbxlight.macros import repo as macros_repo
 from rbxlight.preview.extract import build_fixture_program
-from rbxlight.preview.layout import RigLayout, normalized_arch_outline
+from rbxlight.preview.layout import RigLayout, normalized_structure
 from rbxlight.venues import repo as venues_repo
 
 #: Static default tempo used for every preview — rekordbox macros carry no
@@ -63,7 +63,7 @@ def build_preview_payload(
           "macro":  {"id": int, "name": str, "beats": int},
         "venue":  {"id": int, "name": str},
         "bpm": int,
-        "truss": [[x, y], ...],  # normalized arch outline, see layout.py
+        "truss": [[x, y], ...],  # normalized structure, see layout.py
         "fixtures": [
             {
               "id": int, "label": str, "kind": str,
@@ -157,6 +157,6 @@ def build_preview_payload(
         "macro": {"id": macro.id, "name": macro.name, "beats": macro.beats},
         "venue": {"id": venue.id, "name": venue.name},
         "bpm": bpm,
-        "truss": normalized_arch_outline(),
+        "truss": normalized_structure(layout),
         "fixtures": fixtures_out,
     }

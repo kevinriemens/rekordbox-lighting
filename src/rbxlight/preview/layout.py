@@ -23,7 +23,7 @@ import math
 import os
 import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rbxlight.models import FIXTURE_SLOT_TYPES
@@ -41,11 +41,6 @@ KIND_BY_MASTER_ID: dict[int, str] = {
 #: macro_fixture slot's fixture_type_id that falls back to "effect" when
 #: the fixture's master id isn't one of the 4 known hardware profiles.
 _EFFECT_SLOT_TYPE_ID: int = 8
-
-#: All valid values of LayoutEntry.kind.
-VALID_KINDS: frozenset[str] = frozenset(
-    {"moving_head", "bar_cell", "par", "tilt_block", "effect", "other"}
-)
 
 # ---------------------------------------------------------------------------
 # Real truss geometry (physical-rig-profile skill, "Physical truss
@@ -121,9 +116,14 @@ def _normalize_point(
 ) -> tuple[float, float]:
     """Map a cm position into normalized [0, 1] space (with margin),
     inverting the vertical axis so ground -> GROUND_Y and up -> SKY_Y.
+
+    A zero-width/height frame (e.g. a perfectly flat, single-row
+    horizontal structure with no vertical extent at all) maps every
+    point on that axis to the centre of the normalized range rather than
+    dividing by zero.
     """
-    frac_x = (x_cm - min_x) / (max_x - min_x)
-    frac_y = (y_cm - min_y) / (max_y - min_y)
+    frac_x = 0.5 if max_x == min_x else (x_cm - min_x) / (max_x - min_x)
+    frac_y = 0.5 if max_y == min_y else (y_cm - min_y) / (max_y - min_y)
     nx = _MARGIN_FRACTION + frac_x * (1 - 2 * _MARGIN_FRACTION)
     ny = _MARGIN_FRACTION + (1 - frac_y) * (1 - 2 * _MARGIN_FRACTION)
     return nx, ny
@@ -132,8 +132,11 @@ def _normalize_point(
 def normalized_arch_outline() -> tuple[tuple[float, float], ...]:
     """`arch_outline_cm()`, normalized into the same [0, 1] convention
     used by `generate_layout` (ground at the bottom, sky at the top),
-    using the arch's own bounding box. Used by the preview payload so the
-    renderer can draw the truss.
+    using the arch's own bounding box ONLY — this is deliberately NOT the
+    same frame `generate_layout` uses for its fixtures (see
+    `normalized_structure` for that). Kept only because older tests still
+    exercise it as a "different bounding box" reference point; production
+    code should call `normalized_structure` instead.
     """
     points = arch_outline_cm()
     xs = [p[0] for p in points]
@@ -141,6 +144,160 @@ def normalized_arch_outline() -> tuple[tuple[float, float], ...]:
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
     return tuple(_normalize_point(x, y, min_x, max_x, min_y, max_y) for x, y in points)
+
+
+def _structure_bounds(
+    structure_cm: Sequence[tuple[float, float]],
+) -> tuple[float, float, float, float]:
+    """The structure polyline's own bounding box: (min_x, max_x, min_y,
+    max_y). Generalizes the old hardcoded `arch_width = p5[0]` concept
+    into a real footprint-bounds derived from whatever shape is given.
+    """
+    xs = [point[0] for point in structure_cm]
+    ys = [point[1] for point in structure_cm]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+@dataclass(frozen=True)
+class NormalizationFrame:
+    """The single cm bounding box (structure polyline unioned with every
+    computed fixture position) used to normalize a RigLayout's fixtures
+    AND its structure into one shared [0, 1] space. Persisted alongside
+    the layout because fixture positions are stored already-normalized —
+    the cm frame that produced them is not otherwise recoverable.
+    """
+
+    min_x: float
+    max_x: float
+    min_y: float
+    max_y: float
+
+
+@dataclass(frozen=True)
+class _StructureSegment:
+    """One segment of a structure polyline, classified by orientation so
+    shape-generic placement rules can be applied against roles
+    (vertical/diagonal/horizontal) instead of fixed indices.
+    """
+
+    index: int
+    start: tuple[float, float]
+    end: tuple[float, float]
+    orientation: str  # "vertical" | "horizontal" | "diagonal"
+    length: float
+
+
+#: Tolerance (cm) below which a segment's dx or dy is treated as zero
+#: when classifying its orientation.
+_ORIENTATION_EPS_CM: float = 1e-6
+
+
+def _classify_segments(
+    structure_cm: Sequence[tuple[float, float]],
+) -> list[_StructureSegment]:
+    """Walk the polyline's segments and classify each by orientation:
+    "vertical" (no horizontal drift), "horizontal" (no vertical drift),
+    else "diagonal". This is what shape-generic placement rules key off
+    instead of fixed indices into the default arch's 6-tuple.
+    """
+    segments: list[_StructureSegment] = []
+    for i in range(len(structure_cm) - 1):
+        start, end = structure_cm[i], structure_cm[i + 1]
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if abs(dx) < _ORIENTATION_EPS_CM and abs(dy) >= _ORIENTATION_EPS_CM:
+            orientation = "vertical"
+        elif abs(dy) < _ORIENTATION_EPS_CM and abs(dx) >= _ORIENTATION_EPS_CM:
+            orientation = "horizontal"
+        else:
+            orientation = "diagonal"
+        segments.append(
+            _StructureSegment(i, start, end, orientation, math.hypot(dx, dy))
+        )
+    return segments
+
+
+def _point_along_segments(
+    segments: Sequence[_StructureSegment], fraction: float
+) -> tuple[float, float]:
+    """Map `fraction` in [0, 1] to a point along the concatenation of
+    `segments`, parametrized by cumulative arc length. Used to distribute
+    fixtures along a run when their natural role (diagonal/vertical) is
+    absent from the structure.
+    """
+    total_length = sum(segment.length for segment in segments)
+    if total_length <= 0:
+        return segments[0].start
+    target = max(0.0, min(fraction, 1.0)) * total_length
+    accumulated = 0.0
+    for segment in segments:
+        if target <= accumulated + segment.length or segment is segments[-1]:
+            t = 0.0 if segment.length == 0 else (target - accumulated) / segment.length
+            t = max(0.0, min(t, 1.0))
+            return (
+                segment.start[0] + t * (segment.end[0] - segment.start[0]),
+                segment.start[1] + t * (segment.end[1] - segment.start[1]),
+            )
+        accumulated += segment.length
+    return segments[-1].end
+
+
+def _run_segments(
+    segments: Sequence[_StructureSegment],
+) -> list[_StructureSegment]:
+    """The segments used to distribute fixtures whose natural role is
+    absent from the structure: the horizontal segments if any exist,
+    else the whole polyline (e.g. a straight horizontal run, which is
+    itself classified "horizontal" and so already covered by the first
+    case).
+    """
+    horizontals = [
+        segment for segment in segments if segment.orientation == "horizontal"
+    ]
+    return horizontals if horizontals else list(segments)
+
+
+def normalized_structure(layout: RigLayout) -> tuple[tuple[float, float], ...]:
+    """`layout.structure_cm`, normalized through the SAME frame used to
+    normalize `layout`'s fixtures (`layout.frame_cm`) — the single shared
+    frame requirement. Falls back to the structure's own bounding box for
+    a legacy layout with no persisted frame. Same margin and same
+    y-inversion convention as `_normalize_point` (ground = high y).
+    """
+    if layout.frame_cm is not None:
+        min_x, max_x = layout.frame_cm.min_x, layout.frame_cm.max_x
+        min_y, max_y = layout.frame_cm.min_y, layout.frame_cm.max_y
+    else:
+        min_x, max_x, min_y, max_y = _structure_bounds(layout.structure_cm)
+    return tuple(
+        _normalize_point(x, y, min_x, max_x, min_y, max_y)
+        for x, y in layout.structure_cm
+    )
+
+
+class DegenerateStructureError(ValueError):
+    """Raised when a loaded layout's `structure_cm` cannot describe a
+    valid polyline: fewer than two vertices, all vertices identical, or
+    any non-finite coordinate.
+    """
+
+
+def _validate_structure_cm(points: Sequence[tuple[float, float]]) -> None:
+    if len(points) < 2:
+        raise DegenerateStructureError(
+            f"structure_cm must have at least two vertices to describe a "
+            f"polyline; got {len(points)}."
+        )
+    for x, y in points:
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise DegenerateStructureError(
+                f"structure_cm contains a non-finite coordinate: ({x!r}, {y!r})."
+            )
+    if len(set(points)) == 1:
+        raise DegenerateStructureError(
+            "structure_cm's vertices are all identical — a degenerate "
+            "zero-length polyline."
+        )
 
 
 #: Default total angular sweep (degrees) for a moving head's pan/tilt
@@ -183,6 +340,16 @@ class RigLayout:
     #: block's address range — reported, never silently merged onto
     #: either bar's leg. Mirrors LayoutMergeResult.orphan_fixture_ids.
     unmapped_cell_ids: tuple[int, ...] = ()
+    #: The stage/truss polyline, in cm — user-owned data, same category
+    #: as pan/tilt calibration. Defaults to the standard 5-segment arch.
+    structure_cm: tuple[tuple[float, float], ...] = field(
+        default_factory=arch_outline_cm
+    )
+    #: The single cm bounding box used to normalize both `structure_cm`
+    #: and every entry's (x, y) — persisted because fixture positions are
+    #: stored already-normalized, discarding the cm frame that produced
+    #: them. None for a legacy layout saved before this field existed.
+    frame_cm: NormalizationFrame | None = None
 
 
 @dataclass(frozen=True)
@@ -243,6 +410,40 @@ def diff_layouts(old: RigLayout, new: RigLayout) -> tuple[LayoutDiffEntry, ...]:
         )
 
     return tuple(diffs)
+
+
+def apply_prior_calibration(
+    fresh: RigLayout, prior_entries: Sequence[LayoutEntry]
+) -> RigLayout:
+    """Rebuild `fresh` with each entry's pan_degrees/tilt_degrees replaced
+    by the matching fixture's prior calibration, when one exists.
+    Position, rotation, label, and kind always come from `fresh` — only
+    pan/tilt sweep calibration is preserved. Used by `layout regenerate`
+    so a fresh algorithmic reposition never wipes a user's pan/tilt
+    calibration. Pure: no I/O.
+    """
+    prior_by_id = {entry.fixture_id: entry for entry in prior_entries}
+    entries = tuple(
+        LayoutEntry(
+            fixture_id=entry.fixture_id,
+            x=entry.x,
+            y=entry.y,
+            label=entry.label,
+            kind=entry.kind,
+            rotation=entry.rotation,
+            pan_degrees=prior.pan_degrees,
+            tilt_degrees=prior.tilt_degrees,
+        )
+        if (prior := prior_by_id.get(entry.fixture_id)) is not None
+        else entry
+        for entry in fresh.entries
+    )
+    return RigLayout(
+        venue_id=fresh.venue_id,
+        entries=entries,
+        structure_cm=fresh.structure_cm,
+        frame_cm=fresh.frame_cm,
+    )
 
 
 @dataclass
@@ -307,40 +508,55 @@ def classify_fixture_kind(fixture: Fixture) -> str:
 def generate_layout(
     venue_id: int,
     fixtures: Sequence[Fixture],
+    structure_cm: tuple[tuple[float, float], ...] | None = None,
     *,
     reverse_cell_order: bool = False,
 ) -> RigLayout:
-    """Produce one LayoutEntry per fixture, mounting each on the real
-    arch by kind + DMX address order (never list position — grouping and
-    ordering must be identical for any input ordering of the same
-    fixtures):
+    """Produce one LayoutEntry per fixture, mounting each onto
+    `structure_cm` (the default 5-segment arch when None) by kind + DMX
+    address order (never list position — grouping and ordering must be
+    identical for any input ordering of the same fixtures).
 
-    - moving_head #1-2 (lowest DMX address first) -> the two diagonal
-      segments, rotation +/-DIAGONAL_ANGLE_DEG
-    - moving_head #3+ (address order) -> spaced evenly along the
-      horizontal top segment, rotation 0
-    - each tilt_block + the bar_cell fixtures whose DMX address falls in
-      its channel range (see `_bar_address_ranges`) -> one bar, mounted
-      VERTICALLY: the lowest-address tilt on the inside of the left
-      vertical segment, the next on the right vertical segment. Grouping
-      is by DMX address ONLY — never by list position, since the real
-      repository returns both tilt blocks before any cell.
-    - pars -> first half by address stand left of the arch, remainder
-      stand right, all on the ground, below every bar cell
+    Placement is shape-generic: the structure's segments are classified
+    by orientation (vertical / diagonal / horizontal) and length, and the
+    per-kind rules below apply against those ROLES rather than fixed
+    indices into the default arch:
+
+    - moving_head: the lowest-address heads (one per diagonal segment,
+      in polyline order) mount at that segment's own midpoint, rotated
+      to the segment's own angle. Every remaining head distributes
+      evenly (address order) along the structure's horizontal segments,
+      or the whole polyline if it has none, rotation 0.
+    - tilt_block + the bar_cell fixtures whose DMX address falls in its
+      channel range (see `_bar_address_ranges`) -> one bar. When the
+      structure has at least as many vertical segments as bar groups,
+      each group mounts VERTICALLY on its own vertical segment (lowest-
+      address tilt on the first vertical in polyline order); otherwise
+      every group distributes along the run in disjoint, address-ordered
+      blocks (never interleaved between groups).
+    - pars -> first half by address stand outside the structure's own
+      footprint on one side, remainder on the other, all at the
+      structure's own ground level (its lowest cm y).
     - a bar_cell whose address falls outside every tilt block's range is
       reported in `RigLayout.unmapped_cell_ids` and positioned at the
-      arch centre (never on either bar's leg)
+      footprint's centre (never on either bar's leg).
+    - anything left unclassified/unmounted also lands at the footprint's
+      centre.
 
-    `reverse_cell_order` mirrors each bar's cell ordering along its
-    height and changes nothing else. Pure and deterministic — identical
+    `reverse_cell_order` mirrors each bar's cell ordering along its own
+    run and changes nothing else. Pure and deterministic — identical
     fixtures in, identical layout out, regardless of input ordering.
+
+    The returned layout also carries `structure_cm` (the shape actually
+    used) and `frame_cm` (the single cm bounding box — structure unioned
+    with every computed fixture position — used to normalize both).
     """
     fixture_list = list(fixtures)
-    if not fixture_list:
-        return RigLayout(venue_id=venue_id, entries=())
-
-    _p0, p1, p2, p3, p4, p5 = arch_outline_cm()
-    arch_width = p5[0]
+    structure = structure_cm if structure_cm is not None else arch_outline_cm()
+    segments = _classify_segments(structure)
+    verticals = [segment for segment in segments if segment.orientation == "vertical"]
+    diagonals = [segment for segment in segments if segment.orientation == "diagonal"]
+    min_x, max_x, min_y, max_y = _structure_bounds(structure)
 
     moving_heads = sorted(
         (f for f in fixture_list if classify_fixture_kind(f) == "moving_head"),
@@ -371,68 +587,115 @@ def generate_layout(
     positions: dict[int, tuple[float, float]] = {}
     rotations: dict[int, float] = {}
 
-    # --- moving heads: first two on the diagonals, rest along the top ---
-    diag_heads = moving_heads[:2]
-    top_heads = moving_heads[2:]
-    diag_specs = ((p1, p2, DIAGONAL_ANGLE_DEG), (p3, p4, -DIAGONAL_ANGLE_DEG))
-    for fixture, (start, end, angle) in zip(diag_heads, diag_specs):
-        positions[fixture.id] = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
-        rotations[fixture.id] = angle
+    # --- moving heads: one per diagonal segment at that segment's own
+    # angle, remainder distributed along the horizontal run (or the
+    # whole polyline, if it has no horizontal segment either) ---
+    diag_heads = moving_heads[: len(diagonals)]
+    top_heads = moving_heads[len(diagonals) :]
+    for fixture, segment in zip(diag_heads, diagonals):
+        positions[fixture.id] = (
+            (segment.start[0] + segment.end[0]) / 2,
+            (segment.start[1] + segment.end[1]) / 2,
+        )
+        dx = segment.end[0] - segment.start[0]
+        dy = segment.end[1] - segment.start[1]
+        rotations[fixture.id] = normalize_rotation(math.degrees(math.atan2(dy, dx)))
 
+    top_run = _run_segments(segments)
     n_top = len(top_heads)
     for i, fixture in enumerate(top_heads):
         frac = (i + 1) / (n_top + 1)
-        positions[fixture.id] = (p2[0] + frac * (p3[0] - p2[0]), p2[1])
+        positions[fixture.id] = _point_along_segments(top_run, frac)
         rotations[fixture.id] = 0.0
 
-    # --- bars: 9 cells mounted vertically, tilt block co-located ---
-    bar_x_by_index = (0.0, arch_width)
-    for bar_index, group in enumerate(bar_groups[:2]):
-        bar_x = bar_x_by_index[bar_index]
-        n_cells = len(group.cells)
-        for i, cell in enumerate(group.cells):
-            slot = (n_cells - 1 - i) if reverse_cell_order else i
-            y_cm = (slot + 0.5) / n_cells * VERTICAL_SEGMENT_LENGTH_CM
-            positions[cell.id] = (bar_x, y_cm)
-            rotations[cell.id] = 0.0
+    # --- bars: one group per vertical segment when there are enough of
+    # them, else every group distributes along the run in disjoint,
+    # address-ordered blocks ---
+    if len(verticals) >= len(bar_groups):
+        for group, vertical in zip(bar_groups, verticals):
+            seg_min_y = min(vertical.start[1], vertical.end[1])
+            seg_max_y = max(vertical.start[1], vertical.end[1])
+            seg_height = seg_max_y - seg_min_y
+            bar_x = vertical.start[0]
+            n_cells = len(group.cells)
+            for i, cell in enumerate(group.cells):
+                slot = (n_cells - 1 - i) if reverse_cell_order else i
+                y_cm = seg_min_y + (slot + 0.5) / n_cells * seg_height
+                positions[cell.id] = (bar_x, y_cm)
+                rotations[cell.id] = 0.0
 
-        positions[group.tilt.id] = (bar_x, VERTICAL_SEGMENT_LENGTH_CM / 2)
-        rotations[group.tilt.id] = normalize_rotation(
-            DEFAULT_TILT_BLOCK_ROTATION_DEGREES
-        )
+            positions[group.tilt.id] = (bar_x, seg_min_y + seg_height / 2)
+            rotations[group.tilt.id] = normalize_rotation(
+                DEFAULT_TILT_BLOCK_ROTATION_DEGREES
+            )
+    else:
+        # Each group gets its own equal-width zone along the run, tilt at
+        # the zone's centre, cells confined to the zone's middle 60% —
+        # so even two same-sized groups' farthest-out cell always stays
+        # strictly closer to its own zone centre than to a neighbouring
+        # zone's, regardless of cell count.
+        run = _run_segments(segments)
+        n_groups = len(bar_groups)
+        zone_width = 1.0 / n_groups
+        for g, group in enumerate(bar_groups):
+            zone_low = g * zone_width
+            tilt_frac = zone_low + zone_width / 2
+            positions[group.tilt.id] = _point_along_segments(run, tilt_frac)
+            rotations[group.tilt.id] = normalize_rotation(
+                DEFAULT_TILT_BLOCK_ROTATION_DEGREES
+            )
 
-    # --- pars: ground level, split left/right outside the arch footprint ---
+            n_cells = len(group.cells)
+            for i, cell in enumerate(group.cells):
+                slot = (n_cells - 1 - i) if reverse_cell_order else i
+                inner_frac = (slot + 0.5) / n_cells
+                cell_frac = zone_low + zone_width * (0.2 + 0.6 * inner_frac)
+                positions[cell.id] = _point_along_segments(run, cell_frac)
+                rotations[cell.id] = 0.0
+
+    # --- pars: ground level, split outside the structure's own footprint ---
     split = (len(pars) + 1) // 2
     left_pars, right_pars = pars[:split], pars[split:]
     for i, fixture in enumerate(left_pars):
-        positions[fixture.id] = (-_PAR_GROUND_OFFSET_CM - i * _PAR_SPACING_CM, 0.0)
+        positions[fixture.id] = (
+            min_x - _PAR_GROUND_OFFSET_CM - i * _PAR_SPACING_CM,
+            min_y,
+        )
         rotations[fixture.id] = 0.0
     for i, fixture in enumerate(right_pars):
         positions[fixture.id] = (
-            arch_width + _PAR_GROUND_OFFSET_CM + i * _PAR_SPACING_CM,
-            0.0,
+            max_x + _PAR_GROUND_OFFSET_CM + i * _PAR_SPACING_CM,
+            min_y,
         )
         rotations[fixture.id] = 0.0
 
-    # --- anything unclassified/unmounted: centre of the arch ---
+    # --- anything unclassified/unmounted: centre of the footprint ---
+    centre = ((min_x + max_x) / 2, (min_y + max_y) / 2)
     for fixture in fixture_list:
         if fixture.id not in positions:
-            positions[fixture.id] = (arch_width / 2, VERTICAL_SEGMENT_LENGTH_CM / 2)
+            positions[fixture.id] = centre
             rotations[fixture.id] = 0.0
 
-    # --- normalize: bounding box is the arch outline unioned with every
-    # fixture position, plus a margin so nothing lands exactly on 0/1 ---
-    all_points = list(arch_outline_cm()) + list(positions.values())
+    # --- normalize: ONE shared frame is the structure unioned with every
+    # computed fixture position, plus a margin so nothing lands exactly
+    # on 0/1 ---
+    all_points = list(structure) + list(positions.values())
     xs = [pt[0] for pt in all_points]
     ys = [pt[1] for pt in all_points]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
+    frame_min_x, frame_max_x = min(xs), max(xs)
+    frame_min_y, frame_max_y = min(ys), max(ys)
 
+    normalized_positions = {
+        fixture_id: _normalize_point(
+            *cm_position, frame_min_x, frame_max_x, frame_min_y, frame_max_y
+        )
+        for fixture_id, cm_position in positions.items()
+    }
     entries = tuple(
         LayoutEntry(
             fixture_id=fixture.id,
-            x=_normalize_point(*positions[fixture.id], min_x, max_x, min_y, max_y)[0],
-            y=_normalize_point(*positions[fixture.id], min_x, max_x, min_y, max_y)[1],
+            x=normalized_positions[fixture.id][0],
+            y=normalized_positions[fixture.id][1],
             label=fixture.name,
             kind=classify_fixture_kind(fixture),
             rotation=rotations[fixture.id],
@@ -443,6 +706,13 @@ def generate_layout(
         venue_id=venue_id,
         entries=entries,
         unmapped_cell_ids=tuple(sorted(unmapped_cell_ids)),
+        structure_cm=structure,
+        frame_cm=NormalizationFrame(
+            min_x=frame_min_x,
+            max_x=frame_max_x,
+            min_y=frame_min_y,
+            max_y=frame_max_y,
+        ),
     )
 
 
@@ -508,10 +778,12 @@ def ensure_layout(
         )
     )
 
-    fresh_by_id = {
-        entry.fixture_id: entry
-        for entry in generate_layout(venue_id, fixture_list).entries
-    }
+    # structure is user-owned data too — a saved custom shape is never
+    # silently reset back to the default arch just because the venue's
+    # fixture patch changed (mirrors layout regenerate's own behavior).
+    target_structure = existing.structure_cm if existing is not None else None
+    fresh = generate_layout(venue_id, fixture_list, target_structure)
+    fresh_by_id = {entry.fixture_id: entry for entry in fresh.entries}
 
     merged_entries = tuple(
         existing_by_id[fixture.id]
@@ -519,7 +791,12 @@ def ensure_layout(
         else fresh_by_id[fixture.id]
         for fixture in fixture_list
     )
-    merged_layout = RigLayout(venue_id=venue_id, entries=merged_entries)
+    merged_layout = RigLayout(
+        venue_id=venue_id,
+        entries=merged_entries,
+        structure_cm=fresh.structure_cm,
+        frame_cm=fresh.frame_cm,
+    )
     save_layout(path, merged_layout)
 
     return LayoutMergeResult(
@@ -551,6 +828,17 @@ def layout_to_dict(layout: RigLayout) -> dict:
             }
             for entry in layout.entries
         ],
+        "structure_cm": [list(point) for point in layout.structure_cm],
+        "frame_cm": (
+            {
+                "min_x": layout.frame_cm.min_x,
+                "max_x": layout.frame_cm.max_x,
+                "min_y": layout.frame_cm.min_y,
+                "max_y": layout.frame_cm.max_y,
+            }
+            if layout.frame_cm is not None
+            else None
+        ),
     }
 
 
@@ -559,8 +847,36 @@ def layout_from_dict(data: dict) -> RigLayout:
     before rotation support existed) defaults to 0.0 rather than failing.
     Missing "pan_degrees"/"tilt_degrees" (layout files written before
     pan/tilt sweep support existed) default to DEFAULT_PAN_DEGREES /
-    DEFAULT_TILT_DEGREES for the same reason.
+    DEFAULT_TILT_DEGREES for the same reason. Missing "structure_cm"
+    (layout files written before stage geometry existed) defaults to the
+    standard arch; missing "frame_cm" defaults to None (recovered from
+    the structure's own bounding box by `normalized_structure`). Same
+    optional-field defaulting precedent as rotation/pan/tilt above — no
+    schema version, no migration step.
+
+    Raises DegenerateStructureError if the loaded `structure_cm` cannot
+    describe a valid polyline.
     """
+    raw_structure = data.get("structure_cm")
+    structure_cm = (
+        tuple((float(x), float(y)) for x, y in raw_structure)
+        if raw_structure is not None
+        else arch_outline_cm()
+    )
+    _validate_structure_cm(structure_cm)
+
+    raw_frame = data.get("frame_cm")
+    frame_cm = (
+        NormalizationFrame(
+            min_x=raw_frame["min_x"],
+            max_x=raw_frame["max_x"],
+            min_y=raw_frame["min_y"],
+            max_y=raw_frame["max_y"],
+        )
+        if raw_frame is not None
+        else None
+    )
+
     return RigLayout(
         venue_id=data["venue_id"],
         entries=tuple(
@@ -576,4 +892,6 @@ def layout_from_dict(data: dict) -> RigLayout:
             )
             for entry in data["entries"]
         ),
+        structure_cm=structure_cm,
+        frame_cm=frame_cm,
     )

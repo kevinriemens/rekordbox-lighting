@@ -485,38 +485,9 @@
     };
   });
 
-  // ---------------------------------------------------------------------
-  // Truss: the real 5-segment arch outline, in the venue's normalized
-  // layout space, drawn as understated scaffolding behind the fixtures.
-  //
-  // The payload's truss polyline is normalized against the arch's OWN
-  // bounding box, while fixture x/y are normalized against a wider bbox
-  // that also includes the ground pars standing outside the arch
-  // footprint — two different horizontal scales. Left uncorrected, the
-  // arch would render wider than the bars actually sit. Recalibrate the
-  // truss's x-axis against the two bar (tilt_block) fixtures, which we
-  // know mount exactly on the left/right legs, so the drawn structure
-  // lines up with where the bars actually render. Computed once, from
-  // the layout as generated — dragging a fixture afterwards must not
-  // make the truss chase it.
-  // ---------------------------------------------------------------------
   var truss = (RBXLIGHT_PAYLOAD.truss || []).map(function (p) {
     return Array.isArray(p) ? { x: p[0], y: p[1] } : { x: p.x, y: p.y };
   });
-
-  (function calibrateTrussX() {
-    if (truss.length === 0) return;
-    var txs = truss.map(function (p) { return p.x; });
-    var txMin = Math.min.apply(null, txs);
-    var txMax = Math.max.apply(null, txs);
-    if (txMax - txMin < 1e-6) return;
-    var bars = fixtures.filter(function (f) { return f.kind === "tilt_block"; });
-    if (bars.length < 2) return;
-    bars = bars.slice().sort(function (a, b) { return a.x - b.x; });
-    var leftX = bars[0].x, rightX = bars[bars.length - 1].x;
-    var scale = (rightX - leftX) / (txMax - txMin);
-    truss.forEach(function (p) { p.x = leftX + (p.x - txMin) * scale; });
-  })();
 
   var totalBeats = Math.max(0, RBXLIGHT_PAYLOAD.macro && RBXLIGHT_PAYLOAD.macro.beats || 0);
 
