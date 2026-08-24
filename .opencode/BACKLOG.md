@@ -20,7 +20,6 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 
 | Story | Epic | Size | One-line |
 |---|---|---|---|
-| `CLI_COMPLETENESS-macro-discovery-commands` | CLI completeness | S/M | `macro list` / `search` / `show`; kills the `python3 -c` snippets in README. Query logic in `macros/repo.py` so the TUI can call it. |
 | `CLI_COMPLETENESS-pretty-print-xml-exports` | CLI completeness | S | Indent at the export boundary only; `macro_data.data` bytes stay compact. |
 | `BUGS-ship-margin-fraction-in-preview-payload` | Bugs | S | One source of truth for the 5% margin; browser reads it from the payload. |
 | `FUTURE-bank-takeover-first-pass` | Future | M | COOL bank, HIGH energy (1162 tracks, 39.2%). Repoints `macro_assign` rows; `initial_macro_id` gives free revert. |
@@ -31,7 +30,7 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 | `FUTURE-fullarcai-venue` | Future | L | Third venue breaking the bar mirror (bars are mounted vertically, not horizontally, so cells form two columns not one surface). Two arch legs can finally do different things. |
 | `FUTURE-ninth-bank-experiment` | Future | S | Bounded, reversible experiment: does rekordbox honour a `macro_pattern` row with `pattern = 9`? Deliverable is a documented YES or NO, not a shipped command. Run it after the takeover. |
 
-**TUI build order:** `CLI_COMPLETENESS-macro-discovery-commands` → `TUI-extract-shared-write-layer`
+**TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → `TUI-extract-shared-write-layer`
 → `TUI-interactive-menu`. The refactor is not optional: without it the TUI hand-rolls safety
 sequencing and becomes a second, unguarded write path.
 
