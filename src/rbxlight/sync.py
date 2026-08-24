@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +26,38 @@ _sha256 = safety._sha256
 
 class StaleWorkingCopyError(RuntimeError):
     """Live DB changed since the last pull — push refused."""
+
+
+@dataclass(frozen=True)
+class PushPlan:
+    """A typed, immutable description of what `push` WOULD do — the
+    render-facts a dry-run needs, built with zero writes. `touches_live`
+    is always True: push is one of the two commands permitted to reach
+    live data at all (see rekordbox-data-safety, rule 9).
+    """
+
+    db_names: tuple[str, ...]
+    work_dir: Path
+    lightingdb_dir: Path
+    touches_live: bool
+
+
+def build_push_plan(work_dir: Path, lightingdb_dir: Path) -> PushPlan:
+    """Build a PushPlan for pushing SYNCED_DB_NAMES from work_dir to
+    lightingdb_dir. Raises FileNotFoundError if any working-copy file is
+    missing — matching push()'s own predictable failure mode, just
+    surfaced before any write is attempted. Never writes anything.
+    """
+    for name in SYNCED_DB_NAMES:
+        path = work_dir / name
+        if not path.exists():
+            raise FileNotFoundError(f"working copy file not found: {path}")
+    return PushPlan(
+        db_names=SYNCED_DB_NAMES,
+        work_dir=work_dir,
+        lightingdb_dir=lightingdb_dir,
+        touches_live=True,
+    )
 
 
 def pull(lightingdb_dir: Path, work_dir: Path) -> Path:
@@ -88,7 +121,9 @@ def push(
     if not force:
         verify_not_stale(work_dir, lightingdb_dir)
 
-    backup_dir = safety._backup_databases(lightingdb_dir, backup_root, trigger_command)
+    backup_dir = safety.backup_live_databases(
+        lightingdb_dir, backup_root, trigger_command
+    )
 
     for name in SYNCED_DB_NAMES:
         shutil.copy2(work_dir / name, lightingdb_dir / name)

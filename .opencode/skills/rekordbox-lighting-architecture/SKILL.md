@@ -17,19 +17,28 @@ You are building a local CLI data tool that safely reads and rewrites a working 
 The project works against a **working copy**, not live rekordbox data. Normal operations never touch live; only `push` does:
 
 ```
-# normal operation — never touches live
-CLI command -> db.connect(work/…) -> repo write in one transaction -> verify by re-read
+# normal operation — never touches live (working copy)
+CLI command -> safety.working_copy_write(work/…) -> repo write in one transaction -> verify by re-read
 
 # the only path to live
-push -> guard_rekordbox_not_running() -> backup_all(LIVE) -> verify_not_stale()
-     -> apply to live -> verify by re-read -> print restore command
+push -> safety.write_transaction(LIVE, verify=...) 
+     -> guard_rekordbox_not_running() -> backup_live_databases() -> BEGIN
+     -> apply to live -> verify(conn) inside txn -> COMMIT -> print restore command
 ```
+
+**Two-tier write model:**
+- **`safety.working_copy_write(db_name)`** — context manager for the disposable working copy (`work/`). No guard, no backup. Use for macro create/delete, layout regenerate/install, and all normal commands.
+- **`safety.write_transaction(db_name, trigger_command, verify=None)`** — context manager for live rekordbox DBs. Enforces: guard rekordbox not running → backup all → BEGIN → yield → verify(conn) inside txn → COMMIT. On exception: rollback + print restore instructions + re-raise. The `verify` parameter is an injectable hook (default: no-op) for operation-specific validation.
 
 `pull` and `push` in `sync.py` are the ONLY code paths permitted to open a live database. Everything else resolves paths to `work/`. A module reaching for a live path outside `sync.py` is a defect — it bypasses the working-copy safety net that makes every other command harmless to run.
 
-No module may open a database read-write except through the `safety` write context manager. Read paths must use the read-only URI connection helper in `db.py`. A change that adds `sqlite3.connect(path)` for a write anywhere outside `safety.py` / `db.py` (or `sync.py`'s push path) is a defect, full stop — it skips the process guard and the backup, and it is exactly the mistake that corrupts a DJ's library before a gig.
+**Dry-run output** is built from typed frozen plan objects (`sync.PushPlan`, `macros.repo.CreateMacroPlan`, `macros.repo.DeleteMacroPlan`) that perform zero writes. The CLI renders these plans before asking for confirmation, so users see exactly what will happen.
 
-Full backup/restore/guard mechanics, the write context manager's API, and the complete pull/push contract (staleness checks, hashing, rules 9 and 10) live in the `rekordbox-data-safety` skill — load it before writing any code that touches a `.db3` file or `sync.py`.
+**Backup and restore utilities:**
+- `safety.backup_live_databases(...)` — public wrapper for timestamped backup with sha256 manifest. Called by `write_transaction` and available to `sync.push` for explicit backup before write.
+- `safety.preflight_restore(backup_dir)` — named guard + verify_backup_integrity sequence. CLI `restore` calls it before its confirm prompt.
+
+Full backup/restore/guard mechanics, the write context manager's complete API, and the complete pull/push contract (staleness checks, hashing) live in the `rekordbox-data-safety` skill — load it before writing any code that touches a `.db3` file or `sync.py`.
 
 ## System Overview
 
@@ -88,7 +97,9 @@ Keep it this flat. This is a personal tool for one rig — no plugin system, no 
 | I need to... | Goes in |
 |---|---|
 | Add a new CLI command | `cli.py` |
-| Open, read, or write any `.db3` file handle | `db.py` (read helpers) / `safety.py` (write context manager) — nowhere else |
+| Write to working copy (macro create/delete, layout regen) | `safety.working_copy_write(db_name)` context manager |
+| Write to live rekordbox DBs (only in `sync.py` push path) | `safety.write_transaction(db_name, trigger_command, verify=...)` context manager |
+| Open, read, or write any `.db3` file handle | `db.py` (read helpers) / `safety.py` (write context managers) — nowhere else |
 | Move data between live and working copy | `sync.py` |
 | Resolve which DB path to use (work vs live) | `db.py` (default: work) |
 | Support a new LightingEditModel XML section | `lightingxml.py` |
@@ -96,7 +107,6 @@ Keep it this flat. This is a personal tool for one rig — no plugin system, no 
 | Modify an existing macro (clone, recolor, stretch) | `macros/transform.py` |
 | Change macro storage, id allocation, YAML round-trip | `macros/repo.py` / `macros/yaml_io.py` |
 | Venue, fixture, or patch logic | `venues/repo.py` (storage) or `venues/builder.py` (generation) |
-| Track/phrase macro assignment | `phrases/repo.py` (storage) or `phrases/assign.py` (bulk logic) |
 | Colour math (ARGB <-> hex/rgb) | `colors.py` |
 | Stage/truss geometry, fixture auto-placement, layout file persistence | `preview/layout.py` |
 | Visualizer payload shape | `preview/payload.py` |
@@ -222,3 +232,7 @@ Any DB-touching work must also load:
 - `rekordbox-data-safety` (mandatory) — backup/restore/guard mechanics and the write context manager contract.
 - `rekordbox-lightingdb-schema` — full table shapes, the LightingEditModel XML format, fixture slot/section matrix.
 - `physical-rig-profile` — the real hardware rig (universes, fixture types, venue patch layouts) that macro/venue generation must stay grounded in.
+
+---
+
+**Updated 2026-08-23:** Documented `safety.working_copy_write` vs `safety.write_transaction` as explicit working-copy-vs-live distinction; added injectable `verify` hook, `preflight_restore`, `backup_live_databases`, and typed frozen plan objects for dry-run output.

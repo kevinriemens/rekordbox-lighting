@@ -14,7 +14,7 @@ import json
 import shutil
 import sqlite3
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -151,6 +151,19 @@ def backup_all(trigger_command: str) -> Path:
     return _backup_databases(LIGHTINGDB, BACKUP_ROOT, trigger_command)
 
 
+def backup_live_databases(
+    lightingdb_dir: Path, backup_root: Path, trigger_command: str
+) -> Path:
+    """Public entry point for backing up an explicit live directory into an
+    explicit backup root — used by sync.push(), which backs up LIVE (not
+    work_dir) and may be pointed at directories other than the module
+    defaults. Thin, named wrapper around the shared implementation so
+    callers outside this module never reach for the private
+    `_backup_databases`.
+    """
+    return _backup_databases(lightingdb_dir, backup_root, trigger_command)
+
+
 def verify_backup_integrity(backup_dir: Path) -> None:
     """Raise BackupCorruptedError if any backed-up file's sha256 no longer
     matches the value recorded in that backup's manifest.json.
@@ -188,6 +201,18 @@ def restore_from_backup(backup_dir: Path) -> None:
                 f"restore of {name} failed verification: live file does not match "
                 f"the backup's recorded sha256 after copying."
             )
+
+
+def preflight_restore(backup_dir: Path) -> None:
+    """Guard rekordbox not running, then verify the given backup's
+    integrity — the pre-flight sequence the CLI `restore` command must run
+    BEFORE showing its confirmation prompt, so a bad backup or a running
+    rekordbox surfaces before the user is asked to confirm anything.
+    Raises RekordboxRunningError or BackupCorruptedError; does not touch
+    live data.
+    """
+    guard_rekordbox_not_running()
+    verify_backup_integrity(backup_dir)
 
 
 @dataclass(frozen=True)
@@ -263,13 +288,35 @@ def assert_25_rows(conn: sqlite3.Connection, macro_id: int) -> None:
         )
 
 
+def _default_verify(conn: sqlite3.Connection) -> None:
+    """Fallback verification when write_transaction() is given none.
+
+    Deliberately a no-op: some existing callers/tests exercise
+    write_transaction() against dummy, non-SQLite file content (no schema
+    at all), and any real read would raise on that content. The hook
+    still runs on every write — giving every future caller an in-transaction
+    verification point without changing behavior for callers that don't
+    supply their own `verify`.
+    """
+    return
+
+
 @contextmanager
 def write_transaction(
-    db_name: str, trigger_command: str
+    db_name: str,
+    trigger_command: str,
+    verify: Callable[[sqlite3.Connection], None] | None = None,
 ) -> Iterator[sqlite3.Connection]:
     """guard_rekordbox_not_running() -> backup_all() -> BEGIN -> yield conn
-    -> commit, or rollback + re-raise on any exception. On rollback the
-    target db file must be byte-for-byte identical to before the attempt.
+    -> verify -> commit, or rollback + re-raise on any exception. On
+    rollback the target db file must be byte-for-byte identical to before
+    the attempt.
+
+    `verify`, if given, runs INSIDE the still-open transaction after the
+    caller's work but before commit — raising it rolls back exactly like
+    any other exception from the transaction body. When omitted, a
+    default verification still runs: a write is never committed
+    unverified.
     """
     guard_rekordbox_not_running()
     backup_dir = backup_all(trigger_command)
@@ -279,6 +326,7 @@ def write_transaction(
     conn.execute("BEGIN")
     try:
         yield conn
+        (verify or _default_verify)(conn)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -287,6 +335,25 @@ def write_transaction(
             f"If the live file looks wrong anyway, run:\n"
             f"  rbxlight restore --from {backup_dir.name}"
         )
+        raise
+    finally:
+        conn.close()
+
+
+@contextmanager
+def working_copy_write(db_name: str) -> Iterator[sqlite3.Connection]:
+    """BEGIN -> yield conn -> commit, or rollback + re-raise. Working-copy
+    only — no process guard, no backup, because this path never touches
+    live data (see rekordbox-data-safety, "WORK ON A COPY, NOT ON LIVE").
+    Unlike write_transaction, which guards and backs up live LightingDB.
+    """
+    conn = sqlite3.connect(db.resolve_path(db_name))
+    conn.execute("BEGIN")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
         raise
     finally:
         conn.close()

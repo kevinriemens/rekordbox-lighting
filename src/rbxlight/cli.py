@@ -14,7 +14,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 
@@ -53,21 +53,29 @@ class _NegativeSafeCommand(typer.core.TyperCommand):
         self.context_settings = {"ignore_unknown_options": True}
 
 
-@contextmanager
-def _working_copy_write(db_name: str) -> Iterator[sqlite3.Connection]:
-    """BEGIN -> yield conn -> commit, or rollback + re-raise. Working-copy
-    only — unlike safety.write_transaction, no guard/backup (never live).
+def _fail(message: str, *, cause: BaseException | None = None) -> NoReturn:
+    """Echo `message` and exit with code 1, chaining `cause` if given.
+
+    Shared exception-to-exit translation for every command that reports a
+    clean error instead of letting a raw exception surface.
     """
-    conn = sqlite3.connect(db.resolve_path(db_name))
-    conn.execute("BEGIN")
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    typer.echo(message)
+    raise typer.Exit(code=1) from cause
+
+
+def _echo_macro_listing(
+    macros: list[repo.Macro], *, header: str, empty_message: str
+) -> None:
+    """Render a macro listing shared by `macro list` and `macro search`:
+    an empty message when there are no results, else a header followed
+    by one formatted line per macro.
+    """
+    if not macros:
+        typer.echo(empty_message)
+        return
+    typer.echo(header)
+    for macro in macros:
+        typer.echo(_format_macro_line(macro))
 
 
 def _require_working_copy(path: Path) -> None:
@@ -77,8 +85,7 @@ def _require_working_copy(path: Path) -> None:
     letting a missing working copy surface as a raw sqlite driver error.
     """
     if not path.exists():
-        typer.echo(f"Working copy not found at {path}. Run `rbxlight pull` first.")
-        raise typer.Exit(code=1)
+        _fail(f"Working copy not found at {path}. Run `rbxlight pull` first.")
 
 
 @contextmanager
@@ -114,11 +121,9 @@ def _resolve_macro_scope(
     Raises typer.Exit(code=1) on conflict.
     """
     if all and factory:
-        typer.echo("Flags --all and --factory cannot be used together.")
-        raise typer.Exit(code=1)
+        _fail("Flags --all and --factory cannot be used together.")
     if user and all:
-        typer.echo("Flags --user and --all cannot be used together.")
-        raise typer.Exit(code=1)
+        _fail("Flags --user and --all cannot be used together.")
     if all:
         return "all"
     if user:
@@ -168,12 +173,11 @@ def _resolve_venue_and_fixtures(
     else:
         venue_id = venues_repo.get_exec_venue_id(user_conn)
         if venue_id is None:
-            typer.echo(
+            _fail(
                 "No venue given and no active venue "
                 "(lighting_property.ExecVenueId) is set. Pass --venue to "
                 "select one explicitly."
             )
-            raise typer.Exit(code=1)
         source = "active venue"
 
     try:
@@ -181,17 +185,16 @@ def _resolve_venue_and_fixtures(
     except LookupError:
         listing = _venue_listing_text(user_conn)
         if source == "explicit":
-            typer.echo(
+            _fail(
                 f"Venue not found: no venue with id {venue_id}.\n"
                 f"Valid venues:\n{listing}"
             )
         else:
-            typer.echo(
+            _fail(
                 f"Active venue (lighting_property.ExecVenueId={venue_id}) is "
                 f"stale — that venue no longer exists.\n"
                 f"Valid venues:\n{listing}"
             )
-        raise typer.Exit(code=1) from None
 
     return venue_obj, venues_repo.list_fixtures(user_conn, venue_id), source
 
@@ -257,15 +260,19 @@ def macro_create(
     ),
 ) -> None:
     """Create a new user macro. Prints the plan; only writes with --write."""
+    plan = repo.build_create_macro_plan(
+        name=name, beats=beats, target_path=db.resolve_path(_MACRO_DB_NAME)
+    )
     typer.echo(
-        f"Plan: create macro '{name}' ({beats} beats), all 25 fixture slots empty."
+        f"Plan: create macro '{plan.name}' ({plan.beats} beats), "
+        "all 25 fixture slots empty."
     )
 
     if not write:
         typer.echo(_DRY_RUN_NOTICE)
         return
 
-    with _working_copy_write(_MACRO_DB_NAME) as conn:
+    with safety.working_copy_write(_MACRO_DB_NAME) as conn:
         macro = repo.create_macro(conn, name=name, beats=beats, payloads={})
 
     typer.echo(f"Created macro '{macro.name}' (id={macro.id}).")
@@ -285,15 +292,17 @@ def macro_delete(
     path = db.resolve_path(_MACRO_DB_NAME)
     read_conn = db.connect_readonly(path)
     try:
-        macro = repo.get_macro(read_conn, macro_id)
+        plan = repo.build_delete_macro_plan(
+            read_conn, macro_id=macro_id, target_path=path
+        )
     except LookupError as exc:
-        typer.echo(f"Macro not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Macro not found: {exc}", cause=exc)
     finally:
         read_conn.close()
 
     typer.echo(
-        f"Plan: delete macro '{macro.name}' (id={macro.id}, beats={macro.beats})."
+        f"Plan: delete macro '{plan.macro_name}' (id={plan.macro_id}, "
+        f"beats={plan.beats})."
     )
 
     if not write:
@@ -301,13 +310,12 @@ def macro_delete(
         return
 
     try:
-        with _working_copy_write(_MACRO_DB_NAME) as conn:
+        with safety.working_copy_write(_MACRO_DB_NAME) as conn:
             repo.delete_macro(conn, macro_id)
     except repo.FactoryMacroImmutableError as exc:
-        typer.echo(f"Refused: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Refused: {exc}", cause=exc)
 
-    typer.echo(f"Deleted macro '{macro.name}' (id={macro.id}).")
+    typer.echo(f"Deleted macro '{plan.macro_name}' (id={plan.macro_id}).")
 
 
 @app.command("preview")
@@ -344,14 +352,11 @@ def preview(
                 macro_conn, user_conn, macro_id, venue_id, merge_result.layout
             )
     except preview_payload.MacroNotFoundError as exc:
-        typer.echo(f"Macro not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Macro not found: {exc}", cause=exc)
     except preview_payload.VenueNotFoundError as exc:
-        typer.echo(f"Venue not found: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Venue not found: {exc}", cause=exc)
     except preview_payload.MissingLayoutEntryError as exc:
-        typer.echo(f"Layout incomplete: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Layout incomplete: {exc}", cause=exc)
 
     html = preview_document.render_preview_document(result)
 
@@ -375,8 +380,7 @@ def pull() -> None:
     try:
         sync.pull(db.LIGHTINGDB, db.WORK_DIR)
     except safety.RekordboxRunningError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
+        _fail(str(exc), cause=exc)
 
     names = ", ".join(sync.SYNCED_DB_NAMES)
     typer.echo(f"Pulled {names} from {db.LIGHTINGDB} into {db.WORK_DIR}.")
@@ -398,8 +402,16 @@ def push(
     unless --force is given.
     """
     if not write:
-        names = ", ".join(sync.SYNCED_DB_NAMES)
-        typer.echo(f"Plan: push {names} from {db.WORK_DIR} to {db.LIGHTINGDB}.")
+        try:
+            plan = sync.build_push_plan(db.WORK_DIR, db.LIGHTINGDB)
+        except FileNotFoundError as exc:
+            _fail(
+                f"Push failed: {exc}. Has the working copy ever been pulled? "
+                "Run `rbxlight pull` first.",
+                cause=exc,
+            )
+        names = ", ".join(plan.db_names)
+        typer.echo(f"Plan: push {names} from {plan.work_dir} to {plan.lightingdb_dir}.")
         typer.echo(_DRY_RUN_NOTICE)
         return
 
@@ -413,17 +425,15 @@ def push(
             force=force,
         )
     except safety.RekordboxRunningError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
+        _fail(str(exc), cause=exc)
     except sync.StaleWorkingCopyError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
+        _fail(str(exc), cause=exc)
     except FileNotFoundError as exc:
-        typer.echo(
+        _fail(
             f"Push failed: {exc}. Has the working copy ever been pulled? "
-            "Run `rbxlight pull` first."
+            "Run `rbxlight pull` first.",
+            cause=exc,
         )
-        raise typer.Exit(code=1) from exc
 
     typer.echo(f"Pushed to live. Backup saved at:\n  {backup_dir}")
 
@@ -455,21 +465,17 @@ def restore(
     backup_dir = safety.BACKUP_ROOT / from_
     manifest_path = backup_dir / "manifest.json"
     if not manifest_path.exists():
-        typer.echo(
+        _fail(
             f"No backup named '{from_}' found under {safety.BACKUP_ROOT}. "
             "Run `rbxlight restore` with no arguments to list available backups."
         )
-        raise typer.Exit(code=1)
 
     try:
-        safety.guard_rekordbox_not_running()
-        safety.verify_backup_integrity(backup_dir)
+        safety.preflight_restore(backup_dir)
     except safety.RekordboxRunningError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
+        _fail(str(exc), cause=exc)
     except safety.BackupCorruptedError as exc:
-        typer.echo(str(exc))
-        raise typer.Exit(code=1) from exc
+        _fail(str(exc), cause=exc)
 
     manifest = json.loads(manifest_path.read_text())
     file_names = [name for name in manifest["files"] if not name.endswith(".meta")]
@@ -609,15 +615,13 @@ def layout_install(
         preview_layout.InvalidSavedLayoutError,
         preview_layout.DegenerateStructureError,
     ) as exc:
-        typer.echo(f"Refused: {exc}")
-        raise typer.Exit(code=1) from exc
+        _fail(f"Refused: {exc}", cause=exc)
 
     if incoming.venue_id != venue_id:
-        typer.echo(
+        _fail(
             f"Refused: {path} is a layout for venue {incoming.venue_id}, but "
             f"the target is venue {venue_id} ({venue_obj.name})."
         )
-        raise typer.Exit(code=1)
 
     fixture_ids = {fixture.id for fixture in fixtures}
     labels_by_id = {entry.fixture_id: entry.label for entry in incoming.entries}
@@ -704,13 +708,7 @@ def macro_list(
     with _readonly_working_copy(_MACRO_DB_NAME) as conn:
         macros = repo.list_macros(conn, scope=scope)
 
-    if not macros:
-        typer.echo("No macros found.")
-        return
-
-    typer.echo("Macros:")
-    for macro in macros:
-        typer.echo(_format_macro_line(macro))
+    _echo_macro_listing(macros, header="Macros:", empty_message="No macros found.")
 
 
 @macro_app.command("search")
@@ -727,13 +725,9 @@ def macro_search(
     with _readonly_working_copy(_MACRO_DB_NAME) as conn:
         results = repo.search_macros(conn, term, scope=scope)
 
-    if not results:
-        typer.echo("No macros found.")
-        return
-
-    typer.echo("Search results:")
-    for macro in results:
-        typer.echo(_format_macro_line(macro))
+    _echo_macro_listing(
+        results, header="Search results:", empty_message="No macros found."
+    )
 
 
 @macro_app.command("show", cls=_NegativeSafeCommand)
@@ -746,8 +740,7 @@ def macro_show(
         try:
             macro = repo.get_macro(conn, macro_id)
         except LookupError as exc:
-            typer.echo(f"Macro {macro_id} not found.")
-            raise typer.Exit(code=1) from exc
+            _fail(f"Macro {macro_id} not found.", cause=exc)
 
         if yaml:
             from rbxlight.macros import yaml_io

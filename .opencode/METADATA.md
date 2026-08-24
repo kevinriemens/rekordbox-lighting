@@ -43,6 +43,7 @@ rekordbox-lighting/
 │   ├── cli.py             → typer entrypoint, one sub-command group per capability
 │   ├── safety.py          → backup / restore / rekordbox process guard / write context manager
 │   ├── db.py              → connection helpers (read-only by default), path resolution
+│   ├── sync.py            → pull (live → work/), push (work → live), staleness check
 │   ├── models.py          → dataclasses: Macro, MacroData, FixtureSlot, Venue, Fixture, MacroPattern
 │   ├── lightingxml.py     → LightingEditModel parse + serialize (exact round-trip)
 │   ├── colors.py          → signed int32 ARGB ↔ rgb/hex
@@ -53,16 +54,23 @@ rekordbox-lighting/
 │   │   └── transform.py   → clone, recolor, stretch, mirror
 │   ├── venues/
 │   │   ├── repo.py        → user.db3 venue/fixture read/write
+│   │   ├── models.py      → Venue, Fixture, FixtureSlot dataclasses
 │   │   └── builder.py     → FullArcAI venue generation, slot allocation solver
-│   └── phrases/
-│       ├── repo.py        → content + phrase_data read/write
-│       └── assign.py      → bulk macro_pattern_id rebalance, phrase reassignment
+│   └── preview/
+│       ├── layout.py      → stage geometry, fixture placement, layout JSON persistence
+│       ├── payload.py     → visualizer payload assembly
+│       ├── extract.py     → macro XML → per-beat brightness/colour/movement
+│       ├── document.py    → self-contained offline HTML rendering
+│       └── template.html  → vanilla-JS visualizer
 ├── tests/                 → mirrors src layout; conftest.py builds throwaway DBs
 │   └── fixtures/          → golden XML payloads captured from the live DB
 ├── backups/               → gitignored, timestamped DB backups
+├── work/                  → working copy (gitignored): macro.db3, user.db3, .pull-state.json
 ├── macros/                → YAML macro definitions
 └── pyproject.toml
 ```
+
+**Corrected 2026-08-23:** Removed non-existent `phrases/` module; added `sync.py`, `venues/models.py`, and `preview/` package with all submodules; added `work/` directory.
 
 ## Tech Stack
 | Type | Technology |

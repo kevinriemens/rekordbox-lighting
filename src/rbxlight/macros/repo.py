@@ -10,6 +10,8 @@ guarded path.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
 
 from rbxlight.models import FIXTURE_SLOT_IDS, FIXTURE_SLOT_TYPES, Macro, MacroData
 
@@ -29,6 +31,58 @@ _USER_ID_FLOOR: int = 10000
 
 class FactoryMacroImmutableError(RuntimeError):
     """Raised when an operation would update/delete a preset=1 macro row."""
+
+
+@dataclass(frozen=True)
+class CreateMacroPlan:
+    """A typed, immutable description of what `macro create` WOULD do —
+    the render-facts a dry-run needs, built with zero writes.
+    """
+
+    name: str
+    beats: int
+    target_path: Path
+    touches_live: bool
+
+
+def build_create_macro_plan(
+    *, name: str, beats: int, target_path: Path
+) -> CreateMacroPlan:
+    """Build a CreateMacroPlan. Never touches the database — the working
+    copy is disposable but a plan is still built with zero writes."""
+    return CreateMacroPlan(
+        name=name, beats=beats, target_path=target_path, touches_live=False
+    )
+
+
+@dataclass(frozen=True)
+class DeleteMacroPlan:
+    """A typed, immutable description of what `macro delete` WOULD do —
+    the render-facts a dry-run needs, built with zero writes.
+    """
+
+    macro_id: int
+    macro_name: str
+    beats: int
+    target_path: Path
+    touches_live: bool
+
+
+def build_delete_macro_plan(
+    conn: sqlite3.Connection, *, macro_id: int, target_path: Path
+) -> DeleteMacroPlan:
+    """Build a DeleteMacroPlan by looking up the target macro. Raises
+    LookupError if it doesn't exist (same predictable failure mode as
+    get_macro). Read-only — never deletes anything.
+    """
+    macro = get_macro(conn, macro_id)
+    return DeleteMacroPlan(
+        macro_id=macro.id,
+        macro_name=macro.name,
+        beats=macro.beats,
+        target_path=target_path,
+        touches_live=False,
+    )
 
 
 def _row_to_macro(row: sqlite3.Row) -> Macro:
