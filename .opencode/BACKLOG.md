@@ -23,15 +23,15 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 | `BUGS-ship-margin-fraction-in-preview-payload` | Bugs | S | One source of truth for the 5% margin; browser reads it from the payload. |
 | `FUTURE-bank-takeover-first-pass` | Future | M | COOL bank, HIGH energy (1162 tracks, 39.2%). Repoints `macro_assign` rows; `initial_macro_id` gives free revert. |
 | `REFACTOR-split-preview-layout-module` | Refactor | M | Splits the 955-line `preview/layout.py` into four flat siblings (geometry, segments, placement, io) behind a re-export facade. Pure refactor — all 103 existing tests must pass unmodified. |
-| `TUI-extract-shared-write-layer` | TUI | M | Prerequisite refactor. Completes `write_transaction` with an injectable verify, promotes `_working_copy_write` out of `cli.py`, adds typed plan objects. Pure refactor — existing tests must pass unmodified. |
 | `TUI-interactive-menu` | TUI | L | `questionary` menu over the domain layer. Full CLI parity, mandatory dry-run → render → confirm on every mutation, louder gate for live writes. |
 | `RIG-calibration-session` | RIG | M | One physical session answering all five rig questions. Observe with rekordbox running, apply every change after quitting it. |
 | `FUTURE-fullarcai-venue` | Future | L | Third venue breaking the bar mirror (bars are mounted vertically, not horizontally, so cells form two columns not one surface). Two arch legs can finally do different things. |
 | `FUTURE-ninth-bank-experiment` | Future | S | Bounded, reversible experiment: does rekordbox honour a `macro_pattern` row with `pattern = 9`? Deliverable is a documented YES or NO, not a shipped command. Run it after the takeover. |
 
-**TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → `TUI-extract-shared-write-layer`
-→ `TUI-interactive-menu`. The refactor is not optional: without it the TUI hand-rolls safety
-sequencing and becomes a second, unguarded write path.
+**TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → ~~`TUI-extract-shared-write-layer`~~ (shipped 2026-08-24)
+→ `TUI-interactive-menu`. The shared write layer now exists (`safety.write_transaction` with injectable
+verify, `safety.working_copy_write`, typed plan objects), so the TUI must call it rather than
+hand-rolling safety sequencing.
 
 **Build order note:** `BUGS-ship-margin-fraction-in-preview-payload` is independent of everything else and is the cheapest
 wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
