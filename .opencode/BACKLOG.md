@@ -29,9 +29,14 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 | `FUTURE-ninth-bank-experiment` | Future | S | Bounded, reversible experiment: does rekordbox honour a `macro_pattern` row with `pattern = 9`? Deliverable is a documented YES or NO, not a shipped command. Run it after the takeover. |
 
 **TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → ~~`TUI-extract-shared-write-layer`~~ (shipped 2026-08-24)
-→ `TUI-interactive-menu`. The shared write layer now exists (`safety.write_transaction` with injectable
-verify, `safety.working_copy_write`, typed plan objects), so the TUI must call it rather than
-hand-rolling safety sequencing.
+→ ~~`TUI-extract-actions-layer`~~ (shipped 2026-08-24) → `TUI-interactive-menu`. Both prerequisites now exist:
+the shared write layer (`safety.write_transaction` with injectable verify, `safety.working_copy_write`,
+typed plan objects) and the shared orchestration layer (`orchestration.resolve_venue` with typed
+not-found/no-active/stale-active errors, `apply_layout_regenerate`, `apply_layout_install`,
+`generate_preview`, plus `PullPlan`/`RestorePlan`/`LayoutRegeneratePlan`/`LayoutInstallPlan`).
+The TUI must call both rather than hand-rolling safety sequencing or re-deriving venue resolution —
+reimplementing either recreates the second-write-path drift these two refactors exist to prevent.
+Note `build_pull_plan`/`build_restore_plan` are unused by `cli.py` on purpose; the TUI is their first consumer.
 
 **Build order note:** `BUGS-ship-margin-fraction-in-preview-payload` is independent of everything else and is the cheapest
 wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
