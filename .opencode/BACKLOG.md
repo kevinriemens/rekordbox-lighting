@@ -94,10 +94,11 @@ All five items have been batched into `RIG-calibration-session` (see "Ready to b
 
 ## Chores
 
-- [ ] **Remove the M1 test macros**
-   `10007 AI TEST CLONE` and `10008 AI TEST SWEEP` are still in the live macro library. They served
-   their purpose (proving rekordbox accepts externally-written macros). A read of the live library on 2026-08-23 confirms both are still present and `enabled=1`, alongside six other user macros (10001-10006). Needs rekordbox quit, then:
-   `pull` → `macro delete 10007 --write` → `macro delete 10008 --write` → `push --write`.
+Nothing open. Completed chores are recorded in `CHANGELOG.md`, not here.
+
+**Noted while clearing the M1 test macros (2026-08-24):** `10002 TEST BAR` (16 beats, `enabled=0`)
+also looks like a leftover test macro, but it predates this tool and was not part of the chore's
+scope, so it was left alone. Confirm whether it is yours before deleting it.
 
 
 ---
