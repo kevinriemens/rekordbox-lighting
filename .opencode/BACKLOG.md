@@ -20,7 +20,6 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 
 | Story | Epic | Size | One-line |
 |---|---|---|---|
-| `CLI_COMPLETENESS-pretty-print-xml-exports` | CLI completeness | S | Indent at the export boundary only; `macro_data.data` bytes stay compact. |
 | `BUGS-ship-margin-fraction-in-preview-payload` | Bugs | S | One source of truth for the 5% margin; browser reads it from the payload. |
 | `FUTURE-bank-takeover-first-pass` | Future | M | COOL bank, HIGH energy (1162 tracks, 39.2%). Repoints `macro_assign` rows; `initial_macro_id` gives free revert. |
 | `REFACTOR-split-preview-layout-module` | Refactor | M | Splits the 955-line `preview/layout.py` into four flat siblings (geometry, segments, placement, io) behind a re-export facade. Pure refactor — all 103 existing tests must pass unmodified. |
@@ -34,7 +33,7 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 → `TUI-interactive-menu`. The refactor is not optional: without it the TUI hand-rolls safety
 sequencing and becomes a second, unguarded write path.
 
-**Build order note:** the two CLI stories are independent of everything else and are the cheapest
+**Build order note:** `BUGS-ship-margin-fraction-in-preview-payload` is independent of everything else and is the cheapest
 wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
 likely to change the plan. Its finding gates the CLUB1+CLUB2 follow-up and M4.
 
