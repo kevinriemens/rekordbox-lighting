@@ -42,6 +42,32 @@ class PushPlan:
     touches_live: bool
 
 
+@dataclass(frozen=True)
+class PullPlan:
+    """A typed, immutable description of what `pull` WOULD do — built
+    with zero writes. `touches_live` is always False: pull only ever
+    refreshes the disposable working copy (see rekordbox-data-safety,
+    "WORK ON A COPY, NOT ON LIVE").
+    """
+
+    db_names: tuple[str, ...]
+    lightingdb_dir: Path
+    work_dir: Path
+    touches_live: bool
+
+
+def build_pull_plan(lightingdb_dir: Path, work_dir: Path) -> PullPlan:
+    """Build a PullPlan describing a pull of SYNCED_DB_NAMES from
+    lightingdb_dir into work_dir. Never writes anything.
+    """
+    return PullPlan(
+        db_names=SYNCED_DB_NAMES,
+        lightingdb_dir=lightingdb_dir,
+        work_dir=work_dir,
+        touches_live=False,
+    )
+
+
 def build_push_plan(work_dir: Path, lightingdb_dir: Path) -> PushPlan:
     """Build a PushPlan for pushing SYNCED_DB_NAMES from work_dir to
     lightingdb_dir. Raises FileNotFoundError if any working-copy file is

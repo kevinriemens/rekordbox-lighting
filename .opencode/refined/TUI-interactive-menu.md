@@ -4,7 +4,7 @@ title: "Interactive menu (questionary-based CLI frontend)"
 estimate: L
 status: ready
 created: 2026-08-23
-depends_on: ["CLI_COMPLETENESS-macro-discovery-commands", "TUI-extract-shared-write-layer"]
+depends_on: ["CLI_COMPLETENESS-macro-discovery-commands", "TUI-extract-shared-write-layer", "TUI-extract-actions-layer"]
 labels: [tui, interactive, safety, questionary, frontend]
 priority: P1
 claimed_by:
@@ -249,6 +249,7 @@ The two-tier write model is fundamental to the UX: working-copy actions (macro c
 * **Rich rendering**: Use `rich` (already available transitively via typer) for rendering plans, diffs, and results. Do not add `rich` as a direct dependency.
 * **Direct domain calls**: Call the domain/repo layer directly (macros/repo.py, venues/repo.py, preview/layout.py, etc.). Do NOT wrap or shell out to the CLI.
 * **Shared safety layer**: Use the typed plan objects and shared safety functions from the prerequisite story (`TUI-extract-shared-write-layer`). Do NOT hand-roll safety sequencing or backup/verify logic.
+* **Shared actions layer**: Use the orchestration and plan builders from the prerequisite story (`TUI-extract-actions-layer`) for venue resolution, layout regenerate/install, preview generation, and the pull/restore plans. Do NOT reimplement these — reimplementing them recreates the second-write-path drift risk both prerequisite stories exist to eliminate.
 * **Two-tier write model**: Working-copy actions use the public working-copy contextmanager (no guard, no backup). Live actions use `write_transaction` with appropriate verification. This distinction must be obvious at the call site.
 * **Dry-run is side-effect free**: Dry-runs must build a plan without performing any write. No backup, no guard, no transaction.
 * **Confirmations default to No**: All `questionary.confirm` calls must have `default=False`.

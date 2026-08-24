@@ -5,11 +5,15 @@ default".
 Normal commands work against the WORKING COPY only (`db.resolve_path`,
 default `live=False`) — never live. The only path to live is `rbxlight
 pull`/`push` in `sync.py`.
+
+Command bodies here are thin: parse flags -> call rbxlight.orchestration
+-> render the result. All venue resolution, layout regenerate/install
+orchestration, and preview pipeline logic lives in `orchestration.py` so a
+future front-end can drive the same operations without importing typer.
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,11 +22,9 @@ from typing import Any, NoReturn
 
 import typer
 
-from rbxlight import db, models, safety, sync
+from rbxlight import db, models, orchestration, safety, sync
 from rbxlight.macros import repo
-from rbxlight.preview import document as preview_document
 from rbxlight.preview import layout as preview_layout
-from rbxlight.preview import payload as preview_payload
 from rbxlight.venues import repo as venues_repo
 
 app = typer.Typer(help="rbxlight — rekordbox 6 LightingDB CLI")
@@ -61,6 +63,18 @@ def _fail(message: str, *, cause: BaseException | None = None) -> NoReturn:
     """
     typer.echo(message)
     raise typer.Exit(code=1) from cause
+
+
+def _fail_missing_working_copy(exc: FileNotFoundError) -> NoReturn:
+    """Shared `push` error: a working-copy file the plan/apply needed
+    doesn't exist. Identical whether the miss happens during the dry-run
+    plan or the actual write.
+    """
+    _fail(
+        f"Push failed: {exc}. Has the working copy ever been pulled? "
+        "Run `rbxlight pull` first.",
+        cause=exc,
+    )
 
 
 def _echo_macro_listing(
@@ -104,7 +118,8 @@ def _readonly_working_copy(db_name: str) -> Iterator[sqlite3.Connection]:
 
 
 def _announce_venue_selection(venue: venues_repo.Venue, source: str) -> None:
-    typer.echo(f"Venue: {venue.id} ({venue.name}) — selected via {source}.")
+    announce_source = "explicit" if source == "explicit" else "active venue"
+    typer.echo(f"Venue: {venue.id} ({venue.name}) — selected via {announce_source}.")
 
 
 def _format_macro_line(macro: repo.Macro) -> str:
@@ -151,57 +166,40 @@ def _venue_listing_text(user_conn: sqlite3.Connection) -> str:
     return "\n".join(_format_venue_line(entry) for entry in entries)
 
 
-def _resolve_venue_and_fixtures(
-    user_conn: sqlite3.Connection, venue: int | None
-) -> tuple[venues_repo.Venue, list[venues_repo.Fixture], str]:
-    """Resolve + validate the venue (explicit id, else the active
-    lighting_property.ExecVenueId) and list its patched fixtures.
-
-    Returns (venue, fixtures, source) where source is "explicit" when
-    `venue` was given, else "active venue". Exits cleanly (code 1) when:
-    - no venue given and no active venue is set
-    - the active venue pointer is stale (points at a venue that no
-      longer exists)
-    - an explicit or active venue id does not exist
-    In every not-found case, the message enumerates the currently valid
-    venues so the user can retry immediately.
-    """
-    venue_id: int | None
-    if venue is not None:
-        venue_id = venue
-        source = "explicit"
-    else:
-        venue_id = venues_repo.get_exec_venue_id(user_conn)
-        if venue_id is None:
-            _fail(
-                "No venue given and no active venue "
-                "(lighting_property.ExecVenueId) is set. Pass --venue to "
-                "select one explicitly."
-            )
-        source = "active venue"
-
-    try:
-        venue_obj = venues_repo.get_venue(user_conn, venue_id)
-    except LookupError:
-        listing = _venue_listing_text(user_conn)
-        if source == "explicit":
-            _fail(
-                f"Venue not found: no venue with id {venue_id}.\n"
-                f"Valid venues:\n{listing}"
-            )
-        else:
-            _fail(
-                f"Active venue (lighting_property.ExecVenueId={venue_id}) is "
-                f"stale — that venue no longer exists.\n"
-                f"Valid venues:\n{listing}"
-            )
-
-    return venue_obj, venues_repo.list_fixtures(user_conn, venue_id), source
-
-
 #: User-facing dry-run gate message — a tested contract, identical across
 #: every mutating command.
 _DRY_RUN_NOTICE = "This is a dry run — nothing was changed. Pass --write to apply."
+
+
+def _resolve_venue_and_fixtures(
+    user_conn: sqlite3.Connection, venue: int | None
+) -> tuple[venues_repo.Venue, list[venues_repo.Fixture], str]:
+    """Resolve a venue via orchestration.resolve_venue, translating its
+    typed exceptions into the CLI's clean-exit error messages.
+    """
+    try:
+        result = orchestration.resolve_venue(user_conn, venue)
+    except orchestration.VenueNotFoundError as exc:
+        listing = _venue_listing_text(user_conn)
+        _fail(
+            f"Venue not found: no venue with id {exc.venue_id}.\n"
+            f"Valid venues:\n{listing}"
+        )
+    except orchestration.NoActiveVenueError:
+        _fail(
+            "No venue given and no active venue "
+            "(lighting_property.ExecVenueId) is set. Pass --venue to "
+            "select one explicitly."
+        )
+    except orchestration.StaleActiveVenueError as exc:
+        listing = _venue_listing_text(user_conn)
+        _fail(
+            f"Active venue (lighting_property.ExecVenueId={exc.stale_venue_id}) is "
+            f"stale — that venue no longer exists.\n"
+            f"Valid venues:\n{listing}"
+        )
+
+    return result.venue, result.fixtures, result.source
 
 
 def _resolve_and_announce_venue(
@@ -215,18 +213,6 @@ def _resolve_and_announce_venue(
         venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
     _announce_venue_selection(venue_obj, source)
     return venue_obj, fixtures
-
-
-def _layout_path(venue_id: int) -> Path:
-    return preview_layout.layout_path_for_venue(venue_id, db.WORK_DIR / "layouts")
-
-
-def _load_existing_layout(layout_path: Path) -> preview_layout.RigLayout | None:
-    """load_layout() only reads — never ensure_layout(), which writes as
-    a side effect of loading and would break a dry-run command's
-    dry-run guarantee.
-    """
-    return preview_layout.load_layout(layout_path)
 
 
 def _print_layout_diff_entry(diff: preview_layout.LayoutDiffEntry) -> None:
@@ -337,31 +323,31 @@ def preview(
     """Render a self-contained HTML preview of a macro against a venue's
     fixture layout. Read-only, nothing to confirm; never touches live data.
     """
+    output_path = Path(output) if output else Path(f"preview_{macro_id}.html")
+
     try:
         with (
             _readonly_working_copy(_MACRO_DB_NAME) as macro_conn,
             _readonly_working_copy(_USER_DB_NAME) as user_conn,
         ):
             venue_obj, fixtures, source = _resolve_venue_and_fixtures(user_conn, venue)
-            venue_id = venue_obj.id
             _announce_venue_selection(venue_obj, source)
-            layout_path = _layout_path(venue_id)
-            merge_result = preview_layout.ensure_layout(layout_path, venue_id, fixtures)
-
-            result = preview_payload.build_preview_payload(
-                macro_conn, user_conn, macro_id, venue_id, merge_result.layout
+            orchestration.generate_preview(
+                macro_conn,
+                user_conn,
+                macro_id,
+                venue_obj.id,
+                fixtures,
+                orchestration.default_layout_dir(),
+                output_path,
             )
-    except preview_payload.MacroNotFoundError as exc:
+    except orchestration.preview_payload.MacroNotFoundError as exc:
         _fail(f"Macro not found: {exc}", cause=exc)
-    except preview_payload.VenueNotFoundError as exc:
+    except orchestration.preview_payload.VenueNotFoundError as exc:
         _fail(f"Venue not found: {exc}", cause=exc)
-    except preview_payload.MissingLayoutEntryError as exc:
+    except orchestration.preview_payload.MissingLayoutEntryError as exc:
         _fail(f"Layout incomplete: {exc}", cause=exc)
 
-    html = preview_document.render_preview_document(result)
-
-    output_path = Path(output) if output else Path(f"preview_{macro_id}.html")
-    output_path.write_text(html, encoding="utf-8")
     typer.echo(f"Preview written to {output_path}")
 
 
@@ -405,11 +391,7 @@ def push(
         try:
             plan = sync.build_push_plan(db.WORK_DIR, db.LIGHTINGDB)
         except FileNotFoundError as exc:
-            _fail(
-                f"Push failed: {exc}. Has the working copy ever been pulled? "
-                "Run `rbxlight pull` first.",
-                cause=exc,
-            )
+            _fail_missing_working_copy(exc)
         names = ", ".join(plan.db_names)
         typer.echo(f"Plan: push {names} from {plan.work_dir} to {plan.lightingdb_dir}.")
         typer.echo(_DRY_RUN_NOTICE)
@@ -429,11 +411,7 @@ def push(
     except sync.StaleWorkingCopyError as exc:
         _fail(str(exc), cause=exc)
     except FileNotFoundError as exc:
-        _fail(
-            f"Push failed: {exc}. Has the working copy ever been pulled? "
-            "Run `rbxlight pull` first.",
-            cause=exc,
-        )
+        _fail_missing_working_copy(exc)
 
     typer.echo(f"Pushed to live. Backup saved at:\n  {backup_dir}")
 
@@ -477,10 +455,9 @@ def restore(
     except safety.BackupCorruptedError as exc:
         _fail(str(exc), cause=exc)
 
-    manifest = json.loads(manifest_path.read_text())
-    file_names = [name for name in manifest["files"] if not name.endswith(".meta")]
+    plan = safety.build_restore_plan(backup_dir, safety.LIGHTINGDB)
     typer.echo(f"This will overwrite the following live files from backup '{from_}':")
-    for name in file_names:
+    for name in plan.file_names:
         typer.echo(f"  {name}")
 
     if not yes and not typer.confirm("Proceed with restore?"):
@@ -524,57 +501,38 @@ def layout_regenerate(
     """
     venue_obj, fixtures = _resolve_and_announce_venue(venue)
     venue_id = venue_obj.id
+    layout_dir = orchestration.default_layout_dir()
 
-    fixture_ids = {fixture.id for fixture in fixtures}
-    layout_path = _layout_path(venue_id)
-    existing = _load_existing_layout(layout_path)
+    plan = orchestration.build_layout_regenerate_plan(
+        venue_id, fixtures, layout_dir, reset_structure=reset_structure
+    )
 
-    # Structure geometry is user-owned data, the same category as pan/tilt
-    # calibration — never reset to the default arch unless explicitly
-    # requested. Reported via its own status line, separate from the
-    # per-fixture diff below.
-    if reset_structure:
-        target_structure = preview_layout.arch_outline_cm()
+    if plan.structure_status == "reset":
         typer.echo("Structure: regenerated to the default arch.")
-    elif existing is not None:
-        target_structure = existing.structure_cm
+    elif plan.structure_status == "preserved":
         typer.echo("Structure: preserved (saved shape unchanged).")
     else:
-        target_structure = None
         typer.echo("Structure: no previous layout — using the default arch.")
 
-    fresh = preview_layout.generate_layout(venue_id, fixtures, target_structure)
-
-    existing_entries = existing.entries if existing is not None else ()
-    old_present_entries = tuple(
-        entry for entry in existing_entries if entry.fixture_id in fixture_ids
-    )
-    orphans = tuple(
-        entry for entry in existing_entries if entry.fixture_id not in fixture_ids
-    )
-    for orphan in sorted(orphans, key=lambda entry: entry.fixture_id):
+    for orphan in sorted(plan.orphans, key=lambda entry: entry.fixture_id):
         typer.echo(
             f"No longer in venue {venue_id}'s patch: "
             f"{orphan.label} (id={orphan.fixture_id})."
         )
 
-    old_present = preview_layout.RigLayout(
-        venue_id=venue_id, entries=old_present_entries
-    )
-    diffs = preview_layout.diff_layouts(old_present, fresh)
-
-    for diff in diffs:
+    for diff in plan.diffs:
         _print_layout_diff_entry(diff)
 
-    unchanged_count = len(fixture_ids) - len(diffs)
-    typer.echo(f"{unchanged_count} fixture(s) unchanged.")
+    typer.echo(f"{plan.unchanged_count} fixture(s) unchanged.")
 
     if not write:
         typer.echo(_DRY_RUN_NOTICE)
         return
 
-    merged_layout = preview_layout.apply_prior_calibration(fresh, old_present_entries)
-    preview_layout.save_layout(layout_path, merged_layout)
+    layout_path = preview_layout.layout_path_for_venue(venue_id, layout_dir)
+    orchestration.apply_layout_regenerate(
+        venue_id, fixtures, layout_dir, reset_structure=reset_structure
+    )
     typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
 
 
@@ -608,59 +566,53 @@ def layout_install(
     """
     venue_obj, fixtures = _resolve_and_announce_venue(venue)
     venue_id = venue_obj.id
+    layout_dir = orchestration.default_layout_dir()
 
     try:
-        incoming = preview_layout.load_layout_file(path)
+        plan = orchestration.build_layout_install_plan(
+            path, venue_id, fixtures, layout_dir
+        )
     except (
         preview_layout.InvalidSavedLayoutError,
         preview_layout.DegenerateStructureError,
     ) as exc:
         _fail(f"Refused: {exc}", cause=exc)
-
-    if incoming.venue_id != venue_id:
+    except orchestration.LayoutVenueMismatchError as exc:
         _fail(
-            f"Refused: {path} is a layout for venue {incoming.venue_id}, but "
-            f"the target is venue {venue_id} ({venue_obj.name})."
+            f"Refused: {path} is a layout for venue {exc.incoming_venue_id}, but "
+            f"the target is venue {exc.target_venue_id} ({venue_obj.name})."
         )
 
-    fixture_ids = {fixture.id for fixture in fixtures}
-    labels_by_id = {entry.fixture_id: entry.label for entry in incoming.entries}
-    missing_fixture_ids = sorted(
-        fixture_id for fixture_id in labels_by_id if fixture_id not in fixture_ids
-    )
-    for missing_id in missing_fixture_ids:
+    labels_by_id = {entry.fixture_id: entry.label for entry in plan.incoming.entries}
+    orphaned_incoming_ids = plan.missing_from_venue_fixture_ids
+    for missing_id in orphaned_incoming_ids:
         typer.echo(
             f"No longer patched into venue {venue_id}: "
             f"{labels_by_id[missing_id]} (id={missing_id})."
         )
 
-    layout_path = _layout_path(venue_id)
-    existing = _load_existing_layout(layout_path)
-
-    if existing is None:
+    if plan.existing is None:
         typer.echo("New file — no existing saved layout for this venue.")
     else:
-        fixture_diffs = preview_layout.diff_layouts(existing, incoming)
-        structure_changed = existing.structure_cm != incoming.structure_cm
-
-        for diff in fixture_diffs:
+        for diff in plan.fixture_diffs:
             _print_layout_diff_entry(diff)
 
-        if structure_changed:
+        if plan.structure_changed:
             typer.echo("Structure/truss: changed.")
 
-        if not fixture_diffs and not structure_changed:
+        if not plan.fixture_diffs and not plan.structure_changed:
             typer.echo("No changes.")
 
     if not write:
         typer.echo(_DRY_RUN_NOTICE)
         return
 
-    if missing_fixture_ids and not yes and not typer.confirm("Proceed anyway?"):
+    if orphaned_incoming_ids and not yes and not typer.confirm("Proceed anyway?"):
         typer.echo("Cancelled — nothing was written.")
         return
 
-    preview_layout.save_layout(layout_path, incoming)
+    orchestration.apply_layout_install(plan, layout_dir)
+    layout_path = preview_layout.layout_path_for_venue(venue_id, layout_dir)
     typer.echo(f"Saved layout for venue {venue_id} to {layout_path}.")
 
 

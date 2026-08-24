@@ -256,6 +256,34 @@ def list_backups() -> list[BackupInfo]:
     return infos
 
 
+@dataclass(frozen=True)
+class RestorePlan:
+    """A typed, immutable description of what `restore` WOULD do — built
+    with zero writes. `touches_live` is always True: restore overwrites
+    LIVE database files, unlike pull's PullPlan.
+    """
+
+    file_names: tuple[str, ...]
+    backup_dir: Path
+    lightingdb_dir: Path
+    touches_live: bool
+
+
+def build_restore_plan(backup_dir: Path, lightingdb_dir: Path) -> RestorePlan:
+    """Build a RestorePlan from a backup directory's manifest.json,
+    listing the live files that would be overwritten (never the
+    metadata-only master.db3 entry). Never writes anything.
+    """
+    manifest = json.loads((backup_dir / "manifest.json").read_text())
+    file_names = tuple(name for name in manifest["files"] if not name.endswith(".meta"))
+    return RestorePlan(
+        file_names=file_names,
+        backup_dir=backup_dir,
+        lightingdb_dir=lightingdb_dir,
+        touches_live=True,
+    )
+
+
 def connect_readonly(db_name: str) -> sqlite3.Connection:
     """Open LIGHTINGDB/db_name via the read-only SQLite URI form — a
     connection that is structurally incapable of writing.
