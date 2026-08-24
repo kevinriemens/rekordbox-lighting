@@ -26,6 +26,15 @@
 
 Global skills also relevant: `python-standards`, `test-behaviour`, `tdd-workflow`, `agent-delegation`.
 
+**Skills are living documents — update them as part of the work, not afterwards.** If building or
+refining a feature turns up a fact that contradicts a project skill, or a schema detail the skill
+does not cover, correcting the skill file is **in scope for that story** and must not be deferred.
+These skills are read as ground truth by every agent, so a stale one silently propagates the error
+into future work. Note the correction and its date in the skill itself, and say so in the story's
+completion report. Precedent: on 2026-08-23 the schema skill documented `macro_assign.phase` as a
+uniform `1..11` (implying 297 rows); the live databases hold 232 rows with a per-energy phase count.
+A refined story had already been written against the wrong number before the contradiction surfaced.
+
 ## Project File Tree Structure
 
 ```

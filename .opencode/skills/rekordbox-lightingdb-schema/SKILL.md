@@ -52,13 +52,13 @@ CREATE TABLE macro_fixture (
 
 CREATE TABLE macro_pattern (
   id      INTEGER PRIMARY KEY,
-  energy  INTEGER,  -- 1..3
-  pattern INTEGER   -- 1..8, or 99
+  energy  INTEGER,  -- 1=HIGH, 2=MID, 3=LOW
+  pattern INTEGER   -- 1..8, or 99 (INTERLUDE)
 );
 
 CREATE TABLE macro_assign (
   macro_pattern_id INTEGER,
-  phase            INTEGER,  -- 1..11
+  phase            INTEGER,  -- range depends on energy, see below
   macro_id         INTEGER,
   initial_macro_id INTEGER,
   PRIMARY KEY (macro_pattern_id, phase)
@@ -313,8 +313,10 @@ CREATE TABLE lighting_property (
 ### How macros get selected for a track
 
 1. `content.macro_pattern_id` selects one of the 27 rows in `macro_pattern` for that track. `macro_pattern = energy(1..3) × style(1..8, 99)` — 3 × 9 = 27 rows total.
-2. `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` maps `(pattern, phase 1..11)` → a concrete `macro_id`. Each pattern has exactly 11 phases.
+2. `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` maps `(pattern, phase)` → a concrete `macro_id`. **The number of phases is NOT uniform — it depends on the pattern's `energy`:** 11 phases for energy 1 (HIGH), 10 for energy 2 (MID), 6 for energy 3 (LOW), and 6 for the INTERLUDE set (`pattern=99`). Measured live total: **232 rows**, not 27 × 11. Anything validating a phase number must derive the upper bound from the pattern's energy; a hardcoded `1..11` accepts phase 11 on a MID pattern, which does not exist. *(Corrected 2026-08-23 against the live DBs — this section previously documented a uniform `1..11`.)*
 3. `phrase_data(content_id, phrase_num, macro_id, initial_macro_id)` is the **per-track override** layer, keyed by `(content_id, phrase_num)`. `phrase_num` observed range is `1..99`. This is what actually fires during playback for a given phrase of a given track — it starts as a copy of the pattern/phase assignment but can be hand-edited per track.
+
+   ⚠️ **`phrase_data` is user work and must never be clobbered.** Because it is the layer that actually fires, it also *shadows* `macro_assign`: changing a bank's assignment does not necessarily change what an already-analyzed track plays. Any feature that rewrites `macro_assign` must treat existing `phrase_data` rows as authoritative and leave them alone, and must be honest that its effect on already-analyzed tracks is not guaranteed. Whether rekordbox ever re-copies `macro_assign` into `phrase_data` (on re-analysis? on a UI action?) is **not yet established** — determine it empirically before promising a behaviour.
 
 ### `lighting_property` known keys
 

@@ -1,172 +1,105 @@
 # Backlog
 
-Raw ideas and future work. Items here need refinement before development.
+Unrefined ideas and future work, grouped by **what is blocking them** — because the blocker
+determines who can move the item forward, and most of these are waiting on the user, not on
+engineering.
+
+- **Ready to build** → run `/build <story>`; the spec is written.
+- **Blocked on a decision** → one answer from the user unblocks refinement.
+- **Blocked on the rig** → needs the physical lights wired; items are batched into refined stories.
+- **Not refinable yet** → the idea itself still needs rethinking.
+- **Chores** → no story needed, just do it.
+
+Shipped work lives in `CHANGELOG.md` with audit copies in `completed/`. Do not track it here.
 
 ---
 
-## Epic: Bugs
+## Ready to build
 
-### Items
+Specs are in `.opencode/refined/`. Detail lives in the story files — these are pointers, not summaries.
 
-- [ ] **4th LPC008S par is unpatched in venue 2**
-  I physically own 4 pars (2 left of the arch on the ground, 2 right). rekordbox venue 2 only
-  patches 3 (ch143, ch150, ch157). Not a tool bug — a gap in the rekordbox patch. Decide whether to
-  add it. Until then the visualizer will only ever draw 3, correctly.
+| Story | Epic | Size | One-line |
+|---|---|---|---|
+| `CLI_COMPLETENESS-macro-discovery-commands` | CLI completeness | S/M | `macro list` / `search` / `show`; kills the `python3 -c` snippets in README. Query logic in `macros/repo.py` so the TUI can call it. |
+| `CLI_COMPLETENESS-pretty-print-xml-exports` | CLI completeness | S | Indent at the export boundary only; `macro_data.data` bytes stay compact. |
+| `BUGS-ship-margin-fraction-in-preview-payload` | Bugs | S | One source of truth for the 5% margin; browser reads it from the payload. |
+| `FUTURE-bank-takeover-first-pass` | Future | M | COOL bank, HIGH energy (1162 tracks, 39.2%). Repoints `macro_assign` rows; `initial_macro_id` gives free revert. |
+| `REFACTOR-split-preview-layout-module` | Refactor | M | Splits the 955-line `preview/layout.py` into four flat siblings (geometry, segments, placement, io) behind a re-export facade. Pure refactor — all 103 existing tests must pass unmodified. |
+| `TUI-extract-shared-write-layer` | TUI | M | Prerequisite refactor. Completes `write_transaction` with an injectable verify, promotes `_working_copy_write` out of `cli.py`, adds typed plan objects. Pure refactor — existing tests must pass unmodified. |
+| `TUI-interactive-menu` | TUI | L | `questionary` menu over the domain layer. Full CLI parity, mandatory dry-run → render → confirm on every mutation, louder gate for live writes. |
+| `RIG-calibration-session` | RIG | M | One physical session answering all five rig questions. Observe with rekordbox running, apply every change after quitting it. |
+| `FUTURE-fullarcai-venue` | Future | L | Third venue breaking the bar mirror (bars are mounted vertically, not horizontally, so cells form two columns not one surface). Two arch legs can finally do different things. |
+| `FUTURE-ninth-bank-experiment` | Future | S | Bounded, reversible experiment: does rekordbox honour a `macro_pattern` row with `pattern = 9`? Deliverable is a documented YES or NO, not a shipped command. Run it after the takeover. |
 
-- [ ] **Bar sweep direction may be inverted**
-  Tilt blocks default to a 90° mounting rotation so their tilt sweeps horizontally. If the bars sweep
-  the wrong way in practice, the default should become 270° rather than the user re-editing it forever.
-  Needs one visual confirmation against the real rig.
+**TUI build order:** `CLI_COMPLETENESS-macro-discovery-commands` → `TUI-extract-shared-write-layer`
+→ `TUI-interactive-menu`. The refactor is not optional: without it the TUI hand-rolls safety
+sequencing and becomes a second, unguarded write path.
 
-- [ ] **The normalization margin is a magic constant mirrored in two languages**
-  `_MARGIN_FRACTION = 0.05` in `preview/layout.py` is duplicated as `TRUSS_MARGIN_FRACTION = 0.05` in
-  `preview/template.html`, because the browser has to invert this module's normalization (margin +
-  y-flip) to show centimetres and export `structure_cm`. Change one without the other and the
-  visualizer silently exports wrong real-world measurements — no crash, no failing test, the polyline
-  is still well-formed and the CLI accepts it. Guarded for now by cross-referencing comments on both
-  sides (2026-08-16), which is a convention, not a mechanism. The real fix is to ship the margin in
-  the preview payload so there is one source of truth; deferred because it reopens the strict
-  payload-key-set test that the truss-editing story had just settled. Precedent exists either way —
-  `DEFAULT_PAN_DEGREES`/`DEFAULT_TILT_DEGREES` are already mirrored — but those are defaults, and a
-  wrong default is visible while a wrong measurement is not.
+**Build order note:** the two CLI stories are independent of everything else and are the cheapest
+wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
+likely to change the plan. Its finding gates the CLUB1+CLUB2 follow-up and M4.
 
----
+**Build order note:** `FUTURE-ninth-bank-experiment` runs after `FUTURE-bank-takeover-first-pass`, and may well be
+cancelled by it. The takeover delivers the same practical outcome — customised lighting on a bank
+the user actually plays — on a bank that is already labelled and already selectable, without
+betting on undocumented rekordbox behaviour. The ninth bank is only worth the risk if the takeover
+proves insufficient.
 
-## Epic: CLI completeness
-
-### Items
-
-- [ ] **Remove the M1 test macros** *(tool now exists — this is just the chore)*
-  `10007 AI TEST CLONE` and `10008 AI TEST SWEEP` are still in the live macro library. They served
-  their purpose (proving rekordbox accepts externally-written macros). `rbxlight macro delete` now
-  exists and respects factory-immutability, so this is:
-  `pull` → `macro delete 10007 --write` → `macro delete 10008 --write` → `push --write`.
-
-- [ ] **`preview/layout.py` is 897 lines and holds five concerns**
-  Geometry, segment classification, fixture placement, normalization and JSON persistence all live
-  in one module. The optimizer declined to split it on 2026-08-16, correctly, since the architecture
-  skill mandates a flat structure — but this is the single largest file in the project and the
-  truss-editing story will add to it. Worth deciding whether the flat rule has an upper bound before
-  it grows again, rather than after.
-
-- [ ] **Pretty-print generated XML**
-  rekordbox writes 2-space-indented `LightingEditModel` payloads; ours are compact single-line.
-  rekordbox accepts both — verified live — so this is purely for humans diffing YAML/XML exports.
-
-- [ ] **CLI commands** 
-  In the ReadMe there's a section on Finding. Shouldn't those be CLI commands?
-
-- [ ] **TUI**
-  I think this CLI will benefit from a small TUI, like `mole` (https://github.com/tw93/mole) for example. It's like an interactive menu so you can make better use of the CLI from a UI perspective.
+**Dependencies:**
+- `FUTURE-fullarcai-venue` depends on `RIG-calibration-session`, specifically the item confirming which physical moving head sits on which truss segment. Designing a new fixture-to-slot assignment on an unverified physical mapping risks designing the wrong show.
+- `FUTURE-fullarcai-venue` should follow `FUTURE-bank-takeover-first-pass`. Without the takeover proving a user-authored macro actually fires on a real track, a third venue is just a more elaborate way to play the same factory programming.
+- `RIG-calibration-session` is worth doing early and is independent of all code stories. Its visualizer verdict retroactively raises or lowers confidence in every macro generated so far, and item 5 feeds the bank-takeover story's user-facing vocabulary.
 
 ---
 
-## Epic: Multi-venue support (makes the tool reusable beyond this rig)
+## Blocked on a decision
 
-**REFINED 2026-08-15 → three stories in `.opencode/refined/`.** Build in order:
-
-1. ~~`MULTI_VENUE-venue-discovery-and-selection` (S)~~ — **BUILT 2026-08-15.** Shipped as more than
-   discovery: `layout regenerate` turned out to never validate the venue at all, so a bad or stale
-   `--venue` silently exited 0. Both venue-aware commands now share one resolver.
-2. ~~`MULTI_VENUE-per-venue-stage-description` (L)~~ — **BUILT 2026-08-16.** Truss is now a saved
-   per-venue cm polyline with its normalization frame persisted alongside it, and placement is
-   segment-role based rather than arch-shaped. The refinement's own diagnosis was right — the
-   hardcode was the placement algorithm, not the constants. Two things it missed: the truss and the
-   fixtures were normalized against *different* bounding boxes (the renderer hid this with a
-   stretch hack that would have started corrupting non-arch shapes), and `_normalize_point` had a
-   divide-by-zero that made a flat truss uncrashable-in-theory only because no one could save one.
-3. ~~`MULTI_VENUE-truss-editing-in-visualizer` (M)~~ — **BUILT 2026-08-16.** Truss points are now
-   selectable, draggable, insertable and deletable in the visualizer with real centimetre readouts,
-   and `rbxlight layout install` closes the loop back into the tool. The story claimed a
-   recalibration hack still needed removing — it had already gone in story 2. The real find was that
-   the browser had neither truss export nor centimetres at all, and that inverting this project's
-   normalization requires the 5% margin *and* the y-flip: without both, pressing Download with zero
-   edits exported a corrupted-but-well-formed polyline that the CLI accepts without complaint.
-
-Decisions taken during refinement: auto-placement stays (generic, along the truss run) rather than
-hand-placing 27 fixtures; truss is stored in **cm**, not normalized, so rig scale survives; truss is
-a **polyline of vertices**, not discrete truss pieces; the existing arch becomes the default shape,
-not a law. Split into three because they share a data model but not a review surface — 2 is Python +
-schema migration, 3 is vanilla-JS canvas work.
-
-Findings that shrank the epic: layout files were already per-venue by construction, and macros are
-venue-agnostic (they address the 25 fixed slots, not a venue's physical patch) so macro generation
-needed no work at all. The real hardcode was never the four arch constants — it was the placement
-algorithm assuming "two verticals, two diagonals and a top".
-
-### Items
-
-- [x] ~~Switch between venues and read the hardware from the selected venue~~ → story 1
-- [x] ~~Per-venue saved light positions~~ → story 2 (largely already true; folded in)
-- [x] ~~User-definable truss geometry~~ → stories 2 + 3
-- [x] ~~Reusability goal (parent of the three above)~~ → the three stories above
+Nothing is currently blocked on a decision. This section is where new blocking questions go.
 
 ---
 
-## Epic: Future Considerations
+## Blocked on the rig
 
-### Items
+All five items have been batched into `RIG-calibration-session` (see "Ready to build"). The setup cost is identical for one as for five, and three are answered by simply looking at the rig.
 
-- [ ] **M2 — `FullArcAI` venue**
-  Originally pitched as unlocking a continuous left→right sweep across all 18 bar cells.
-  **That rationale was wrong** — the bars are mounted vertically, so their cells form two vertical
-  columns, not one horizontal surface. Needs re-pitching around what the rig actually does:
-  vertical rises/falls per leg, mirrored or opposed between legs, plus horizontal bar sweeps and
-  the four heads moving in 3D. Do not build the original plan.
+**Correction recorded 2026-08-23:** The item "Bar sweep direction may be inverted" proposed flipping `DEFAULT_TILT_BLOCK_ROTATION_DEGREES` from 90° to 270°. This is wrong. Test `test_should_never_give_the_two_tilt_blocks_opposing_mounting_rotations` asserts both bars always receive the SAME mounting rotation. The mirrored sweep seen on stage comes from each fixture's own `tilt_reversal` DMX flag, sourced from `user.db3` `fixture.tilt_reversal` — never from opposing mounting-rotation constants. Flipping both would double-mirror, which is the exact bug that test guards against. Do not re-propose changing `DEFAULT_TILT_BLOCK_ROTATION_DEGREES`.
 
-- [ ] **M4 — Phrase/pattern rebalance**
-  2943 tracks, but 60% sit on just 2 of 27 macro_patterns (pattern 1 = 39.5%, pattern 7 = 20.7%).
-  Each pattern is an 11-phase loop, so a long set cycles the same handful of macros —
-  `HIGH CHORUS1 COOL` alone fires 5596×. Spread tracks across all 27 patterns using BPM/energy
-  heuristics. Dry-run diff first, fully reversible. This is the change that most affects how a
-  4-hour set actually feels, and it requires no change to how I play.
+**Also recorded 2026-08-23:** The "Confirm the rekordbox panel vocabulary" item changed premise. The CLI and README currently use no bank/energy/mood/phase wording at all, so there is nothing to reconcile yet. The item is now about capturing rekordbox's exact on-screen wording BEFORE the bank-takeover story introduces a `bank` command and puts those words in front of the user — cheaper than renaming a shipped command later.
 
-- [ ] **Custom banks — own the 8 mood banks before trying to invent a 9th**
-  *Researched 2026-08-15 against the live DBs. Findings below are measured, not assumed.*
 
-  A "bank" is a row in `macro.db3.macro_pattern`, which is nothing but the cross product
-  `energy (1=HIGH, 2=MID, 3=LOW) × pattern (1..8, plus 99)`:
-  `1=COOL 2=NATURAL 3=HOT 4=SUBTLE 5=WARM 6=VIVID 7=CLUB1 8=CLUB2`, `99` = the 6-phase
-  INTERLUDE set. 3 × 9 = the 27 `macro_pattern` ids. `content.macro_pattern_id` is how a track
-  picks one; `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` is how a bank
-  picks a macro per phrase slot (11 phases for HIGH, 10 for MID, 6 for LOW/INTERLUDE).
+---
 
-  **The names live nowhere in any database.** Not `macro.db3`, not `user.db3`, not `master.db3` —
-  there is no name/label column on `macro_pattern` at all. COOL/NATURAL/… are hardcoded UI strings
-  in the rekordbox binary, keyed off the `pattern` integer. So "add a custom bank *with a name*"
-  is not something the schema can express.
+## Not refinable yet
 
-  **The far more valuable finding:** all 232 `macro_assign` slots across the 27 banks point at
-  factory macros (`preset=1`). Zero point at a user macro. The bank mechanism is fully rewritable
-  and completely untouched — swap a slot's `macro_id` to a `preset=0` macro (10001+) and that bank
-  now plays my programming. Taking over e.g. CLUB1 and CLUB2 across all three energies yields
-  6 banks × up to 11 phases = ~62 slots of entirely custom show, today, with no schema risk.
-  The label stays "CLUB1"; everything behind it is mine. This is the real feature, and it composes
-  with M4 (rebalance decides *which* bank a track gets, this decides *what a bank plays*).
+- [ ] **M4 — Phrase/pattern rebalance** *(parked behind the bank takeover — 2026-08-23)*
+   2966 tracks, but 60% sit on just 2 of 27 macro_patterns (pattern 1 = 39.2%, pattern 7 = 20.7%).
+   Each pattern is a phase loop, so a long set cycles the same handful of macros — `HIGH CHORUS1 COOL`
+   alone fires 5607×. Spreading tracks across all 27 patterns is the change that most affects how a
+   4-hour set feels, and requires no change to how the user plays. Dry-run diff first, fully reversible.
 
-  **A genuinely 9th bank (`pattern=9`, new `macro_pattern` id 28) is speculative.** Inserting the
-  row and pointing `content.macro_pattern_id` at it is trivial; whether rekordbox honours it is not
-  known. Two failure modes to test for: the mood selector is almost certainly a fixed 8-button row,
-  so the bank would be unreachable and unlabeled in the UI, and touching that selector for a track
-  would snap it back into 1..8; and rekordbox may prune `macro_pattern`/`content` rows it does not
-  recognise on load. Cost to find out is one experiment — insert id 28, point one throwaway track at
-  it, launch rekordbox, re-read. Backup first; this touches `content`, which holds 2943 rows of real
-  work. **Do the takeover work first — it delivers the same outcome without betting on the unknown.**
+   **Shadowing question answered:** of 41742 `phrase_data` rows across 2905 distinct tracks, only **36** have `macro_id <> initial_macro_id` (user-overridden), and zero have a NULL `macro_id`. Shadowing is negligible, so a rebalance would not be limited to newly-analysed tracks. **Orphan group:** 61 tracks point at `macro_pattern_id = 0`, for which no `macro_pattern` row exists — worth investigating during M4.
 
-  Related: `lighting_property` holds live panel state `MoodLastId=2`, `BankLastId=3`,
-  `PhraseLastId=2`, `StrobeLastId=1`. Inferred (needs one glance at the rekordbox UI to confirm):
-  the panel's MOOD selector = `pattern`, its BANK selector = `energy`. Worth pinning down before
-  writing any user-facing copy, so the tool's vocabulary matches rekordbox's.
+  **Parked deliberately, not deprioritised.** Rebalancing today only spreads tracks across banks that
+  all still play factory programming — it redistributes the same show. After the takeover lands there
+  is something worth spreading onto, and the heuristic can target the banks actually customised.
+  Also decided: bank selection should be informed by what the tracks actually *are* (genre/energy,
+  looked up externally), not BPM alone — a BPM-only heuristic puts a deep-house record and a
+  hard-techno record in the same bank.
 
-- [ ] **Calibrate the visualizer against the real rig**
-  The preview renders OUR interpretation of the format, not rekordbox's engine. Movement patterns
-  are approximations and pan/tilt sweeps default to 540°/270° with no datasheet. One A/B session
-  with the lights wired would calibrate it and raise confidence in everything generated since.
+  **Down to one item.** This section previously held five items; four have been refined into stories or
+  cancelled. M4 is waiting on the bank takeover to land, so there is something worth spreading tracks
+  onto. Once the takeover ships, M4 becomes ready to build.
 
-- [ ] **Confirm LM70S pan/tilt sweep degrees**
-  Defaults are 540° pan / 270° tilt, editable per fixture in the layout. Wrong values over- or
-  under-scale movement in the preview but break nothing else.
 
-- [ ] **Moving-head-to-truss-segment assignment is by patch order, not name**
-  The layout puts moving heads 1 and 2 on the diagonals. I refer to MH1 and MH4 as the tilted
-  ones. Only I can resolve which physical head sits on which segment — until then, drag and save.
+
+---
+
+## Chores
+
+- [ ] **Remove the M1 test macros**
+   `10007 AI TEST CLONE` and `10008 AI TEST SWEEP` are still in the live macro library. They served
+   their purpose (proving rekordbox accepts externally-written macros). A read of the live library on 2026-08-23 confirms both are still present and `enabled=1`, alongside six other user macros (10001-10006). Needs rekordbox quit, then:
+   `pull` → `macro delete 10007 --write` → `macro delete 10008 --write` → `push --write`.
+
+
+---
