@@ -140,6 +140,33 @@ Reopen rekordbox and your changes are there.
 
 ---
 
+## Interactive menu
+
+Run `rbxlight` with no arguments — or `rbxlight tui` explicitly — and you get a menu instead of
+having to remember commands:
+
+```
+Macros · Preview · Layout · Venues · Sync · Backups · Exit
+```
+
+Every existing command still works exactly as before, including `rbxlight --help`.
+
+**Every mutating action is a dry-run first.** Pick an action and the menu always shows you the
+plan — what would change — before it asks you to confirm anything. There's no way to skip straight
+to a write. Confirmations default to **No**.
+
+Working-copy actions (macro create/delete, layout regenerate/install, sync pull) are disposable and
+reversible, so they just ask a plain yes/no. Anything that touches your **live** rekordbox databases
+(sync push, restoring a backup) gets a distinct, harder-to-miss warning: it names exactly which live
+files will be overwritten, the backup that will be taken first, and the exact command you'd run to
+restore it — and instead of `y`, it makes you type a confirmation word.
+
+The menu needs a real interactive terminal. If stdin/stdout isn't a TTY (scripts, cron, CI), it
+refuses to start and tells you to use the CLI commands directly instead — the CLI remains the
+supported way to script or automate this tool.
+
+---
+
 ## Everyday commands
 
 | I want to... | Command |

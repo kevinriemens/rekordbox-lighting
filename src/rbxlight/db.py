@@ -6,6 +6,8 @@ rekordbox-lighting-architecture skill, "The Flow That Must Not Break".
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 #: Working-copy directory. Ordinary commands resolve here by default.
@@ -29,3 +31,31 @@ def resolve_path(db_name: str, *, live: bool = False) -> Path:
 def connect_readonly(path: Path) -> sqlite3.Connection:
     """Open path via the read-only SQLite URI form."""
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+class WorkingCopyMissingError(FileNotFoundError):
+    """Raised when a working-copy DB file does not exist at `path`."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        super().__init__(f"Working copy not found at {path}.")
+
+
+@contextmanager
+def readonly_working_copy(db_name: str) -> Iterator[sqlite3.Connection]:
+    """Resolve db_name in the working copy, require it exists, open it
+    read-only, and guarantee close.
+
+    Raises `WorkingCopyMissingError` if the working-copy file is missing.
+    Callers that need typer-specific exit/failure behaviour (e.g. `cli.py`)
+    should catch this and translate it themselves — this module stays
+    typer-free.
+    """
+    path = resolve_path(db_name)
+    if not path.exists():
+        raise WorkingCopyMissingError(path)
+    conn = connect_readonly(path)
+    try:
+        yield conn
+    finally:
+        conn.close()

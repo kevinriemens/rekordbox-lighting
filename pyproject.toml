@@ -9,6 +9,7 @@ requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
     "ruamel.yaml>=0.18",
+    "questionary>=2.0",
 ]
 
 [project.optional-dependencies]

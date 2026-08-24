@@ -22,12 +22,14 @@ from typing import Any, NoReturn
 
 import typer
 
-from rbxlight import db, models, orchestration, safety, sync
+from rbxlight import db, orchestration, safety, sync
 from rbxlight.macros import repo
 from rbxlight.preview import layout as preview_layout
 from rbxlight.venues import repo as venues_repo
 
-app = typer.Typer(help="rbxlight — rekordbox 6 LightingDB CLI")
+app = typer.Typer(
+    help="rbxlight — rekordbox 6 LightingDB CLI", invoke_without_command=True
+)
 
 macro_app = typer.Typer(help="Macro authoring commands")
 app.add_typer(macro_app, name="macro")
@@ -40,6 +42,49 @@ app.add_typer(venue_app, name="venue")
 
 _MACRO_DB_NAME = "macro.db3"
 _USER_DB_NAME = "user.db3"
+
+
+def _launch_menu() -> int:
+    """Real, TTY-checked entrypoint into the interactive menu. Imports
+    `rbxlight.menu` at FUNCTION scope only — see
+    `tests/tui/test_structural_boundaries.py`, which asserts this module
+    never imports `rbxlight.menu` at module scope.
+    """
+    import sys
+
+    from rbxlight.menu import app as menu_app
+    from rbxlight.menu import tty as menu_tty
+    from rbxlight.menu.prompts import QuestionaryPrompter
+    from rbxlight.menu.render import RichRenderer
+
+    try:
+        menu_tty.require_interactive_tty(sys.stdin, sys.stdout)
+    except menu_tty.NotATtyError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    try:
+        return menu_app.run_menu(QuestionaryPrompter(), RichRenderer())
+    except KeyboardInterrupt:
+        return 130
+
+
+@app.callback(invoke_without_command=True)
+def _main(ctx: typer.Context) -> None:
+    """With no subcommand, launch the interactive menu instead of
+    printing help.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    raise typer.Exit(code=_launch_menu())
+
+
+@app.command("tui")
+def tui() -> None:
+    """Launch the interactive menu — identical to running rbxlight with
+    no arguments.
+    """
+    raise typer.Exit(code=_launch_menu())
 
 
 class _NegativeSafeCommand(typer.core.TyperCommand):
@@ -92,29 +137,21 @@ def _echo_macro_listing(
         typer.echo(_format_macro_line(macro))
 
 
-def _require_working_copy(path: Path) -> None:
-    """Guard shared by every venue-aware/working-copy-reading command.
-
-    Raises a clean typer.Exit pointing the user at `pull` instead of
-    letting a missing working copy surface as a raw sqlite driver error.
-    """
-    if not path.exists():
-        _fail(f"Working copy not found at {path}. Run `rbxlight pull` first.")
-
-
 @contextmanager
 def _readonly_working_copy(db_name: str) -> Iterator[sqlite3.Connection]:
     """Resolve db_name in the working copy, require it exists, open it
     read-only, and guarantee close. Shared by every read-only
     working-copy command (`preview`, `layout regenerate`, `venue list`).
+
+    Thin typer wrapper around `db.readonly_working_copy`: translates a
+    missing working copy into the same clean `_fail` exit this command
+    group has always produced.
     """
-    path = db.resolve_path(db_name)
-    _require_working_copy(path)
-    conn = db.connect_readonly(path)
     try:
-        yield conn
-    finally:
-        conn.close()
+        with db.readonly_working_copy(db_name) as conn:
+            yield conn
+    except db.WorkingCopyMissingError as exc:
+        _fail(f"Working copy not found at {exc.path}. Run `rbxlight pull` first.")
 
 
 def _announce_venue_selection(venue: venues_repo.Venue, source: str) -> None:
@@ -700,8 +737,7 @@ def macro_show(
             typer.echo(yaml_io.export_macro_yaml(conn, macro_id), nl=False)
             return
 
-        data_rows = repo.list_macro_data(conn, macro_id)
-        data_by_slot = {row.macro_fixture_id: row.xml for row in data_rows}
+        slot_statuses = repo.get_slot_statuses(conn, macro_id)
 
     preset_label = "user" if macro.preset == 0 else "factory"
     enabled_label = "yes" if macro.enabled else "no"
@@ -711,7 +747,6 @@ def macro_show(
     typer.echo(f"  Preset: {preset_label} ({macro.preset})")
     typer.echo(f"  Enabled: {enabled_label} ({macro.enabled})")
     typer.echo("  Fixture slots:")
-    for slot_id in models.FIXTURE_SLOT_IDS:
-        payload = data_by_slot.get(slot_id, "")
-        status = "programmed" if payload else "empty"
-        typer.echo(f"    {slot_id}: {status}")
+    for slot in slot_statuses:
+        status = "programmed" if slot.programmed else "empty"
+        typer.echo(f"    {slot.slot_id}: {status}")

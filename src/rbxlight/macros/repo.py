@@ -135,6 +135,27 @@ def list_macro_data(conn: sqlite3.Connection, macro_id: int) -> list[MacroData]:
     ]
 
 
+@dataclass(frozen=True)
+class SlotStatus:
+    """Programmed/empty verdict for one fixture slot of a macro."""
+
+    slot_id: int
+    programmed: bool
+
+
+def get_slot_statuses(conn: sqlite3.Connection, macro_id: int) -> list[SlotStatus]:
+    """Derive the programmed/empty verdict for every fixture slot of
+    macro_id, in `FIXTURE_SLOT_IDS` order.
+    """
+    data_by_slot = {
+        row.macro_fixture_id: row.xml for row in list_macro_data(conn, macro_id)
+    }
+    return [
+        SlotStatus(slot_id=slot_id, programmed=bool(data_by_slot.get(slot_id, "")))
+        for slot_id in FIXTURE_SLOT_IDS
+    ]
+
+
 def create_macro(
     conn: sqlite3.Connection,
     name: str,
