@@ -524,20 +524,26 @@
     typeof RBXLIGHT_PAYLOAD.frame_cm.min_x === "number") ? RBXLIGHT_PAYLOAD.frame_cm : null;
   var trussEditable = frameCm !== null;
 
-  // Mirrors preview.layout._MARGIN_FRACTION exactly (not shipped in the
-  // payload — a shared magic constant, same category as the
-  // DEFAULT_PAN_DEGREES/DEFAULT_TILT_DEGREES mirrors above). The payload's
-  // `truss` array was produced by _normalize_point, which (a) reserves
-  // this fraction of [0,1] as margin on every side and (b) INVERTS the
-  // vertical axis (ground = the larger end of [0,1], so `ny` is 1-fracY,
-  // not fracY). A conversion that skips either step reconstructs the
-  // wrong cm point — verified concretely: the true ground-level endpoint
-  // (0, 0) cm round-trips through a margin/flip-blind inverse as roughly
-  // (12, 210) cm, i.e. flipped almost to the top of the arch. Both steps
-  // must be inverted for the panel's centimetre readout and the exported
-  // structure_cm to be real-world correct (req 10) rather than merely
-  // shaped correctly.
-  var TRUSS_MARGIN_FRACTION = 0.05;
+  // Corrected 2026-08-24: read from the payload's `margin_fraction` key
+  // (see preview.layout.MARGIN_FRACTION / preview/payload.py) instead of
+  // a hardcoded mirror. The payload's `truss` array was produced by
+  // _normalize_point, which (a) reserves this fraction of [0,1] as
+  // margin on every side and (b) INVERTS the vertical axis (ground = the
+  // larger end of [0,1], so `ny` is 1-fracY, not fracY). A conversion
+  // that skips either step reconstructs the wrong cm point — verified
+  // concretely: the true ground-level endpoint (0, 0) cm round-trips
+  // through a margin/flip-blind inverse as roughly (12, 210) cm, i.e.
+  // flipped almost to the top of the arch. Both steps must be inverted
+  // for the panel's centimetre readout and the exported structure_cm to
+  // be real-world correct (req 10) rather than merely shaped correctly.
+  if (typeof RBXLIGHT_PAYLOAD.margin_fraction !== "number") {
+    throw new Error(
+      "RBXLIGHT_PAYLOAD.margin_fraction is missing or not a number " +
+      "(payload/template version mismatch: this template requires the " +
+      "payload to include a numeric margin_fraction key)."
+    );
+  }
+  var TRUSS_MARGIN_FRACTION = RBXLIGHT_PAYLOAD.margin_fraction;
 
   function cmToNorm(pt) {
     var spanX = frameCm.max_x - frameCm.min_x;

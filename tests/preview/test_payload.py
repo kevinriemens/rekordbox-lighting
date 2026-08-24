@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from rbxlight.preview import layout, payload
-from rbxlight.preview.layout import RigLayout
+from rbxlight.preview.layout import MARGIN_FRACTION, RigLayout
 from rbxlight.preview.payload import (
     DEFAULT_BPM,
     MacroNotFoundError,
@@ -409,6 +409,7 @@ class TestBuildPreviewPayload:
             "truss",
             "fixtures",
             "frame_cm",
+            "margin_fraction",
         }
         for point in result["truss"]:
             assert len(point) == 2
@@ -445,6 +446,27 @@ class TestBuildPreviewPayload:
             "min_y": rig_layout.frame_cm.min_y,
             "max_y": rig_layout.frame_cm.max_y,
         }
+
+    def test_should_expose_the_normalization_margin_fraction_as_data(
+        self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection
+    ) -> None:
+        # Given: a fully built payload
+        macro_id = a_user_macro(macro_db_conn, macro_id=10008)
+        venue_id = a_small_full_arc_venue(user_db_conn)
+        rig_layout = _layout_for(user_db_conn, venue_id)
+
+        # When: building the payload
+        result = payload.build_preview_payload(
+            macro_db_conn, user_db_conn, macro_id, venue_id, rig_layout
+        )
+
+        # Then: the margin fraction is carried as data, using the exact
+        # constant the normalization code itself uses — not a re-hardcoded
+        # literal duplicated by the renderer
+        assert result["margin_fraction"] == MARGIN_FRACTION
+        assert isinstance(result["margin_fraction"], float)
+        serialized = json.dumps(result, allow_nan=False)
+        assert isinstance(serialized, str)
 
     def test_should_produce_a_usable_payload_when_the_layout_has_no_reference_box(
         self, macro_db_conn: sqlite3.Connection, user_db_conn: sqlite3.Connection

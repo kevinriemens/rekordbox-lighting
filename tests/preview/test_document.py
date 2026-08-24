@@ -8,11 +8,13 @@ from __future__ import annotations
 import json
 
 from rbxlight.preview import document
+from rbxlight.preview.layout import MARGIN_FRACTION
 
 _SAMPLE_PAYLOAD: dict = {
     "macro": {"id": 10008, "name": "AI TEST SWEEP", "beats": 32},
     "venue": {"id": 2, "name": "TestVenue"},
     "bpm": 128,
+    "margin_fraction": MARGIN_FRACTION,
     "fixtures": [
         {
             "id": 16,
@@ -84,6 +86,16 @@ class TestRenderPreviewDocument:
         assert "@import" not in result
         assert '<img src="http' not in result
         assert "<img src='http" not in result
+
+    def test_should_embed_the_margin_fraction_in_the_rendered_document(self) -> None:
+        # Given: a built preview payload carrying the margin fraction
+        # When: rendering the document
+        result = document.render_preview_document(_SAMPLE_PAYLOAD)
+
+        # Then: the embedded JSON carries the exact same margin fraction
+        # value the payload was built with
+        embedded = json.loads(_extract_embedded_json(result))
+        assert embedded["margin_fraction"] == MARGIN_FRACTION
 
     def test_should_handle_a_payload_with_no_fixtures(self) -> None:
         # Given: an edge-case empty-fixtures payload

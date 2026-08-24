@@ -12,7 +12,12 @@ import sqlite3
 
 from rbxlight.macros import repo as macros_repo
 from rbxlight.preview.extract import build_fixture_program
-from rbxlight.preview.layout import RigLayout, frame_cm_to_dict, normalized_structure
+from rbxlight.preview.layout import (
+    MARGIN_FRACTION,
+    RigLayout,
+    frame_cm_to_dict,
+    normalized_structure,
+)
 from rbxlight.venues import repo as venues_repo
 
 #: Static default tempo used for every preview — rekordbox macros carry no
@@ -79,7 +84,15 @@ def build_preview_payload(
           ],
           "frame_cm": {"min_x": float, "max_x": float, "min_y": float,
                        "max_y": float} | None,  # see layout.NormalizationFrame
+          "margin_fraction": float,  # see layout.MARGIN_FRACTION
         }
+
+    `margin_fraction` is the fraction of the normalized [0, 1] range
+    reserved as margin on every side by the normalization algorithm
+    (`layout.MARGIN_FRACTION`). It is a constant property of the
+    algorithm, not per-macro/venue/layout data, but is shipped here so
+    the renderer can invert the normalization without duplicating the
+    value as a hardcoded literal.
 
     `frame_cm` mirrors `layout.frame_cm` unchanged — the real-world (cm)
     bounding box the layout's fixtures and structure were normalized
@@ -169,4 +182,5 @@ def build_preview_payload(
         "truss": normalized_structure(layout),
         "fixtures": fixtures_out,
         "frame_cm": frame_cm_to_dict(layout.frame_cm),
+        "margin_fraction": MARGIN_FRACTION,
     }

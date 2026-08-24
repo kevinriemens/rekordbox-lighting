@@ -34,11 +34,11 @@ SKY_Y: float = 0.0
 #: side, so nothing lands exactly on the 0/1 edge (which would clip in a
 #: renderer).
 #:
-#: Mirrored in JavaScript as TRUSS_MARGIN_FRACTION in template.html, which
-#: inverts this margin reservation and the y-axis flip in _normalize_point
-#: to recover real-world centimetres. Change one without the other and
-#: structure_cm exports silently corrupted coordinates — no crash, no test.
-_MARGIN_FRACTION: float = 0.05
+#: Corrected 2026-08-24: this is no longer mirrored as a hardcoded JS
+#: literal. It is shipped in the preview payload (`margin_fraction` key,
+#: see `preview/payload.py`) and read by template.html at render time, so
+#: there is a single source of truth.
+MARGIN_FRACTION: float = 0.05
 
 
 def arch_outline_cm() -> tuple[tuple[float, float], ...]:
@@ -86,8 +86,8 @@ def _normalize_point(
     """
     frac_x = 0.5 if max_x == min_x else (x_cm - min_x) / (max_x - min_x)
     frac_y = 0.5 if max_y == min_y else (y_cm - min_y) / (max_y - min_y)
-    nx = _MARGIN_FRACTION + frac_x * (1 - 2 * _MARGIN_FRACTION)
-    ny = _MARGIN_FRACTION + (1 - frac_y) * (1 - 2 * _MARGIN_FRACTION)
+    nx = MARGIN_FRACTION + frac_x * (1 - 2 * MARGIN_FRACTION)
+    ny = MARGIN_FRACTION + (1 - frac_y) * (1 - 2 * MARGIN_FRACTION)
     return nx, ny
 
 
