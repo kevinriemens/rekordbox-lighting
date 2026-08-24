@@ -57,11 +57,15 @@ rekordbox-lighting/
 │   │   ├── models.py      → Venue, Fixture, FixtureSlot dataclasses
 │   │   └── builder.py     → FullArcAI venue generation, slot allocation solver
 │   └── preview/
-│       ├── layout.py      → stage geometry, fixture placement, layout JSON persistence
-│       ├── payload.py     → visualizer payload assembly
-│       ├── extract.py     → macro XML → per-beat brightness/colour/movement
-│       ├── document.py    → self-contained offline HTML rendering
-│       └── template.html  → vanilla-JS visualizer
+│       ├── layout.py          → re-export facade for 23 public symbols
+│       ├── layout_geometry.py → stage/arch geometry, coordinate normalization
+│       ├── layout_segments.py → truss segment classification, point-along-segment mapping
+│       ├── layout_placement.py → fixture placement, fixture-kind classification, generate_layout
+│       ├── layout_io.py       → layout JSON load/save/diff/merge, dict (de)serialization
+│       ├── payload.py         → visualizer payload assembly
+│       ├── extract.py         → macro XML → per-beat brightness/colour/movement
+│       ├── document.py        → self-contained offline HTML rendering
+│       └── template.html      → vanilla-JS visualizer
 ├── tests/                 → mirrors src layout; conftest.py builds throwaway DBs
 │   └── fixtures/          → golden XML payloads captured from the live DB
 ├── backups/               → gitignored, timestamped DB backups
@@ -71,6 +75,8 @@ rekordbox-lighting/
 ```
 
 **Corrected 2026-08-23:** Removed non-existent `phrases/` module; added `sync.py`, `venues/models.py`, and `preview/` package with all submodules; added `work/` directory.
+
+**Corrected 2026-08-24:** Split `preview/layout.py` (955 ln) into five flat siblings with one-directional imports: geometry ← segments ← placement ← io ← layout.py facade.
 
 ## Tech Stack
 | Type | Technology |

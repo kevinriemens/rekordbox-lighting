@@ -108,19 +108,36 @@ Keep it this flat. This is a personal tool for one rig — no plugin system, no 
 | Change macro storage, id allocation, YAML round-trip | `macros/repo.py` / `macros/yaml_io.py` |
 | Venue, fixture, or patch logic | `venues/repo.py` (storage) or `venues/builder.py` (generation) |
 | Colour math (ARGB <-> hex/rgb) | `colors.py` |
-| Stage/truss geometry, fixture auto-placement, layout file persistence | `preview/layout.py` |
+| Stage/truss geometry, fixture auto-placement, layout file persistence | `preview/layout*.py` (see flat-structure section) |
 | Visualizer payload shape | `preview/payload.py` |
 | Anything the visualizer draws or how it draws it | `preview/template.html` |
 | New domain type | `models.py` — plain dataclass, no behavior beyond simple derived properties |
 
-### `preview/layout.py` is the one deliberate exception to flatness
+### Flat structure: no nested sub-packages, but split large modules into siblings
 
-It owns five concerns at once — stage geometry, segment classification, fixture placement,
-normalization, and layout JSON persistence — and is the largest module in the project (~900 lines).
-That is intentional under the flat rule, not an oversight: the concerns share one coordinate system
-and splitting them would spread a single invariant across four files.
+"Flat" means **no nested sub-packages** (e.g. no `preview/geometry/internal/helpers/`) — it does NOT mean "never split a file".
+A module past roughly 400 lines with separable concerns should split into **sibling modules within its own package**,
+keeping one module as the public facade that re-exports the public symbols.
 
-Two things to know before changing it:
+**2026-08-23 clarification** (supersedes 2026-08-16 decision that declined to split `preview/layout.py`):
+The 2026-08-16 decision was made because the flat rule had no upper bound. This clarification removes that ambiguity.
+
+#### Worked example: `preview/layout*` sibling set
+
+`preview/layout.py` (955 lines) was split into five flat siblings with strict one-directional imports:
+
+- `layout_geometry.py` (168 ln) — stage/arch geometry, coordinate normalization, normalization frame. No sibling imports.
+- `layout_segments.py` (119 ln) — truss segment classification, point-along-segment mapping, structure validation. Imports: `geometry`.
+- `layout_placement.py` (406 ln) — fixture placement onto the arch, fixture-kind classification, `generate_layout`, `apply_prior_calibration`. Imports: `geometry`, `segments`.
+- `layout_io.py` (310 ln) — layout JSON load/save/diff/merge, dict (de)serialization, path resolution. Imports: `geometry`, `segments`, `placement`.
+- `layout.py` (97 ln) — pure re-export facade for the 23 public symbols. No logic. No sibling imports FROM it.
+
+**Import direction is strictly one-directional:** `geometry` ← `segments` ← `placement` ← `io` ← `layout.py`.
+
+**Review gate:** If anyone later makes `layout_geometry.py` import from `layout_placement.py` (or otherwise reverses the chain),
+a circular import appears. Reviewers must reject upward imports in this chain.
+
+Two things to know before changing any `preview/layout*` module:
 
 - **Layout files are the tool's own data, not rekordbox's.** They live in `work/layouts/layout_venue_{id}.json`.
   Truss geometry in particular is this tool's concept and must never be written into any `.db3`.
@@ -235,4 +252,4 @@ Any DB-touching work must also load:
 
 ---
 
-**Updated 2026-08-23:** Documented `safety.working_copy_write` vs `safety.write_transaction` as explicit working-copy-vs-live distinction; added injectable `verify` hook, `preflight_restore`, `backup_live_databases`, and typed frozen plan objects for dry-run output.
+**Updated 2026-08-23:** Documented `safety.working_copy_write` vs `safety.write_transaction` as explicit working-copy-vs-live distinction; added injectable `verify` hook, `preflight_restore`, `backup_live_databases`, and typed frozen plan objects for dry-run output. Clarified flat-structure rule: no nested sub-packages, but modules >400 lines with separable concerns should split into siblings with one facade. Documented `preview/layout*` sibling set (geometry ← segments ← placement ← io ← layout.py) as worked example; added review gate against circular imports.
