@@ -2268,7 +2268,9 @@ class TestLoadLayoutStructureValidation:
             layout.load_layout(path)
 
     @pytest.mark.parametrize(
-        "bad_coord", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+        "bad_coord",
+        [float("nan"), float("inf"), float("-inf")],
+        ids=["nan", "inf", "-inf"],
     )
     def test_should_raise_a_typed_error_for_a_non_finite_coordinate(
         self, tmp_path: Path, bad_coord: float
@@ -2290,9 +2292,7 @@ class TestLoadLayoutStructureValidation:
         with pytest.raises(layout.DegenerateStructureError):
             layout.load_layout(path)
 
-    def test_should_name_the_problem_in_the_error_message(
-        self, tmp_path: Path
-    ) -> None:
+    def test_should_name_the_problem_in_the_error_message(self, tmp_path: Path) -> None:
         # Given: a degenerate single-vertex structure
         path = tmp_path / "layout_venue_2.json"
         legacy_payload = {
@@ -2391,9 +2391,7 @@ class TestLoadLayoutFile:
         with pytest.raises(layout.InvalidSavedLayoutError):
             layout.load_layout_file(path)
 
-    def test_should_name_the_problem_in_the_error_message(
-        self, tmp_path: Path
-    ) -> None:
+    def test_should_name_the_problem_in_the_error_message(self, tmp_path: Path) -> None:
         # Given: an unparseable file
         path = tmp_path / "export.json"
         path.write_text("{not json", encoding="utf-8")
@@ -2414,9 +2412,7 @@ class TestLoadLayoutFile:
         # not re-wrapped as InvalidSavedLayoutError
         path = tmp_path / "export.json"
         path.write_text(
-            json.dumps(
-                {"venue_id": 2, "entries": [], "structure_cm": [[1.0, 1.0]]}
-            ),
+            json.dumps({"venue_id": 2, "entries": [], "structure_cm": [[1.0, 1.0]]}),
             encoding="utf-8",
         )
 
@@ -2424,15 +2420,11 @@ class TestLoadLayoutFile:
         with pytest.raises(layout.DegenerateStructureError):
             layout.load_layout_file(path)
 
-    def test_should_return_a_rig_layout_for_a_valid_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_should_return_a_rig_layout_for_a_valid_file(self, tmp_path: Path) -> None:
         # Given: a real, validly saved layout file
         original = RigLayout(
             venue_id=2,
-            entries=(
-                LayoutEntry(fixture_id=1, x=0.5, y=0.5, label="X", kind="par"),
-            ),
+            entries=(LayoutEntry(fixture_id=1, x=0.5, y=0.5, label="X", kind="par"),),
         )
         path = tmp_path / "export.json"
         layout.save_layout(path, original)
@@ -2456,9 +2448,7 @@ class TestLoadLayoutFile:
         # Then: the standard default arch is used, same as load_layout
         assert loaded.structure_cm == layout.arch_outline_cm()
 
-    def test_should_load_a_file_with_zero_fixture_entries(
-        self, tmp_path: Path
-    ) -> None:
+    def test_should_load_a_file_with_zero_fixture_entries(self, tmp_path: Path) -> None:
         # Given: a structurally valid file with no fixtures at all
         path = tmp_path / "export.json"
         path.write_text(json.dumps({"venue_id": 2, "entries": []}), encoding="utf-8")

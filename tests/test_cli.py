@@ -14,12 +14,17 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from rbxlight import cli, db, safety
+from rbxlight.macros import yaml_io
 from rbxlight.preview import layout as preview_layout
 from rbxlight.venues import repo as venues_repo
 from tests.conftest import make_macro_db, make_user_db
 from tests.fixtures.macro_fixtures import (
+    ALL_25_SLOT_IDS,
     a_factory_macro,
     a_user_macro,
+    a_valid_slot_payload,
+    insert_macro_data_row,
+    insert_macro_row,
     sentinel_macro_rows,
 )
 from tests.fixtures.venue_fixtures import (
@@ -1484,11 +1489,15 @@ class TestLayoutRegenerateCommand:
         custom_b = ((0.0, 0.0), (0.0, 150.0), (200.0, 150.0), (200.0, 0.0))
         preview_layout.save_layout(
             layout_path_a,
-            preview_layout.RigLayout(venue_id=venue_a, entries=(), structure_cm=custom_a),
+            preview_layout.RigLayout(
+                venue_id=venue_a, entries=(), structure_cm=custom_a
+            ),
         )
         preview_layout.save_layout(
             layout_path_b,
-            preview_layout.RigLayout(venue_id=venue_b, entries=(), structure_cm=custom_b),
+            preview_layout.RigLayout(
+                venue_id=venue_b, entries=(), structure_cm=custom_b
+            ),
         )
         b_original_bytes = layout_path_b.read_bytes()
 
@@ -1976,9 +1985,7 @@ class TestLayoutInstallCommand:
         # Then: refused with a clear, actionable message — not a traceback
         assert result.exit_code != 0
         assert_no_unhandled_exception(result)
-        assert (
-            "vertex" in result.stdout.lower() or "vertices" in result.stdout.lower()
-        )
+        assert "vertex" in result.stdout.lower() or "vertices" in result.stdout.lower()
         assert not target_path.exists()
 
     # -----------------------------------------------------------------
@@ -2685,9 +2692,7 @@ class TestLayoutInstallCommand:
         export_path = tmp_path / "export.json"
         preview_layout.save_layout(
             export_path,
-            preview_layout.RigLayout(
-                venue_id=work_layout_dbs["venue_id"], entries=()
-            ),
+            preview_layout.RigLayout(venue_id=work_layout_dbs["venue_id"], entries=()),
         )
 
         # When: installing (dry run)
@@ -2729,3 +2734,569 @@ class TestLayoutInstallCommand:
 
         # Then: it loads safely via the existing defaulting, no crash
         assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight macro list` — read-only listing of macros in the working copy.
+# Default scope is user-only (preset=0); --all and --factory override.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def work_macro_list_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    """A working copy seeded with user and factory macros for list/search/show."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    macro_path = make_macro_db(work_dir / "macro.db3")
+    monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+    conn = sqlite3.connect(macro_path)
+    a_user_macro(conn, macro_id=10006, name="HIGH DROP1", beats=32)
+    a_user_macro(conn, macro_id=10001, name="MID CHORUS COOL", beats=64)
+    a_factory_macro(conn, macro_id=61, name="FACTORY BEAT")
+    sentinel_macro_rows(conn)
+    conn.close()
+
+    return {"work_dir": work_dir, "macro_path": macro_path}
+
+
+class TestMacroListCommand:
+    def test_should_print_header_and_indented_lines_for_user_macros(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a working copy with user macros seeded
+        # When: running macro list
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: header "Macros:" followed by 2-space-indented macro lines
+        assert result.exit_code == 0
+        lines = result.stdout.strip().splitlines()
+        assert lines[0] == "Macros:"
+        macro_lines = [line for line in lines[1:] if line.strip()]
+        assert len(macro_lines) == 2
+        for line in macro_lines:
+            assert line.startswith("  ")
+
+    def test_should_format_macro_line_as_id_name_beats(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a user macro "HIGH DROP1" with id=10006, beats=32
+        # When: running macro list
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: the line is exactly "  10006: HIGH DROP1 (32 beats)"
+        assert "10006: HIGH DROP1 (32 beats)" in result.stdout
+
+    def test_should_order_by_id_ascending(self, work_macro_list_db: dict) -> None:
+        # Given: macros with ids 10001 and 10006
+        # When: running macro list
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: id 10001 appears before id 10006 in the output
+        pos_10001 = result.stdout.index("10001:")
+        pos_10006 = result.stdout.index("10006:")
+        assert pos_10001 < pos_10006
+
+    def test_should_exclude_factory_macros_by_default(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a factory macro "FACTORY BEAT" exists
+        # When: running macro list (default scope = user)
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: factory macros are not shown
+        assert "FACTORY BEAT" not in result.stdout
+        assert "61:" not in result.stdout
+
+    def test_should_include_factory_macros_with_all_flag(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: both user and factory macros exist
+        # When: running macro list --all
+        result = runner.invoke(cli.app, ["macro", "list", "--all"])
+
+        # Then: both user and factory macros appear
+        assert "HIGH DROP1" in result.stdout
+        assert "FACTORY BEAT" in result.stdout
+        assert "10006:" in result.stdout
+        assert "61:" in result.stdout
+
+    def test_should_show_factory_macros_only_with_factory_flag(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: both user and factory macros exist
+        # When: running macro list --factory
+        result = runner.invoke(cli.app, ["macro", "list", "--factory"])
+
+        # Then: only factory macros appear
+        assert "FACTORY BEAT" in result.stdout
+        assert "61:" in result.stdout
+        assert "HIGH DROP1" not in result.stdout
+        assert "10006:" not in result.stdout
+
+    def test_should_print_no_macros_found_when_no_user_macros(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy with only factory macros
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        a_factory_macro(conn, macro_id=61, name="FACTORY ONLY")
+        conn.close()
+
+        # When: running macro list (default = user only)
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: "No macros found." message, exit 0
+        assert result.exit_code == 0
+        assert "No macros found." in result.stdout
+
+    def test_should_be_read_only(self, work_macro_list_db: dict) -> None:
+        # Given: the current macro.db3 bytes
+        original_bytes = Path(work_macro_list_db["macro_path"]).read_bytes()
+
+        # When: running macro list
+        runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: the database is byte-for-byte unchanged
+        assert Path(work_macro_list_db["macro_path"]).read_bytes() == original_bytes
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight macro search TERM` — case-insensitive substring search.
+# ---------------------------------------------------------------------------
+
+
+class TestMacroSearchCommand:
+    def test_should_print_header_and_matching_lines(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a factory macro containing "BEAT"
+        # When: searching for "BEAT" (default scope = factory)
+        result = runner.invoke(cli.app, ["macro", "search", "BEAT"])
+
+        # Then: header "Search results:" followed by matching lines
+        assert result.exit_code == 0
+        assert "Search results:" in result.stdout
+        assert "FACTORY BEAT" in result.stdout
+
+    def test_should_match_case_insensitively(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a factory macro named "FACTORY beat"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        a_factory_macro(conn, macro_id=61, name="FACTORY beat")
+        conn.close()
+
+        # When: searching with uppercase term
+        result = runner.invoke(cli.app, ["macro", "search", "BEAT"])
+
+        # Then: it matches case-insensitively
+        assert "FACTORY beat" in result.stdout
+        assert result.exit_code == 0
+
+    def test_should_search_factory_macros_by_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy with a factory macro containing "DROP" and
+        # a user macro also containing "DROP"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        a_factory_macro(conn, macro_id=61, name="FACTORY DROP")
+        a_user_macro(conn, macro_id=10001, name="USER DROP")
+        conn.close()
+
+        # When: searching for "DROP" with no scope flag
+        result = runner.invoke(cli.app, ["macro", "search", "DROP"])
+
+        # Then: only factory macros are returned by default
+        assert "FACTORY DROP" in result.stdout
+        assert "USER DROP" not in result.stdout
+
+    def test_should_search_user_macros_with_user_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working copy with a factory macro containing "DROP" and
+        # a user macro also containing "DROP"
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        a_factory_macro(conn, macro_id=61, name="FACTORY DROP")
+        a_user_macro(conn, macro_id=10001, name="USER DROP")
+        conn.close()
+
+        # When: searching for "DROP" with --user flag
+        result = runner.invoke(cli.app, ["macro", "search", "DROP", "--user"])
+
+        # Then: only user macros are returned
+        assert "USER DROP" in result.stdout
+        assert "FACTORY DROP" not in result.stdout
+
+    def test_should_search_all_macros_with_all_flag(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: both user and factory macros
+        # When: searching all scope for "FACTORY"
+        result = runner.invoke(cli.app, ["macro", "search", "FACTORY", "--all"])
+
+        # Then: factory macros are included
+        assert "FACTORY BEAT" in result.stdout
+        assert "61:" in result.stdout
+
+    def test_should_print_no_macros_found_when_no_matches(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: macros exist but none match the search term
+        # When: searching for a non-existent term
+        result = runner.invoke(cli.app, ["macro", "search", "NONEXISTENT"])
+
+        # Then: "No macros found." message, exit 0
+        assert result.exit_code == 0
+        assert "No macros found." in result.stdout
+
+    def test_should_treat_percent_as_literal_not_wildcard(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: macros exist in the working copy
+        # When: searching for "100%" — no macro contains this literal
+        result = runner.invoke(cli.app, ["macro", "search", "100%"])
+
+        # Then: no match (percent treated as literal, not wildcard)
+        assert result.exit_code == 0
+        assert "No macros found." in result.stdout
+
+    def test_should_treat_underscore_as_literal_not_wildcard(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: macros exist in the working copy
+        # When: searching for "DROP_" — no macro contains this literal
+        result = runner.invoke(cli.app, ["macro", "search", "DROP_"])
+
+        # Then: no match (underscore treated as literal, not wildcard)
+        assert result.exit_code == 0
+        assert "No macros found." in result.stdout
+
+    def test_should_order_results_by_id_ascending(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: macros 10001 "MID CHORUS COOL" and 10006 "HIGH DROP1"
+        # When: searching user macros for "COOL" which only matches 10001
+        result = runner.invoke(cli.app, ["macro", "search", "COOL", "--user"])
+
+        # Then: only 10001 is returned
+        assert "10001:" in result.stdout
+        assert "10006:" not in result.stdout
+
+    def test_should_be_read_only(self, work_macro_list_db: dict) -> None:
+        # Given: the current macro.db3 bytes
+        original_bytes = Path(work_macro_list_db["macro_path"]).read_bytes()
+
+        # When: running macro search
+        runner.invoke(cli.app, ["macro", "search", "CHORUS"])
+
+        # Then: the database is byte-for-byte unchanged
+        assert Path(work_macro_list_db["macro_path"]).read_bytes() == original_bytes
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight macro show <id>` — detailed metadata for one macro.
+# ---------------------------------------------------------------------------
+
+
+class TestMacroShowCommand:
+    def test_should_print_metadata_block_for_user_macro(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a user macro with id=10006
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "10006"])
+
+        # Then: metadata block with id, name, beats, preset, enabled
+        assert result.exit_code == 0
+        assert "Macro 10006: HIGH DROP1" in result.stdout
+        assert "Beats: 32" in result.stdout
+        assert "Preset: user (0)" in result.stdout
+        assert "Enabled: yes (1)" in result.stdout
+
+    def test_should_print_all_25_fixture_slots(self, work_macro_list_db: dict) -> None:
+        # Given: a user macro with id=10006 (all slots empty)
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "10006"])
+
+        # Then: "Fixture slots:" section with exactly 25 entries
+        assert "Fixture slots:" in result.stdout
+        lines = result.stdout.strip().splitlines()
+        slot_lines = [line.strip() for line in lines if line.strip().startswith(())]
+        # Count lines that look like "N: programmed" or "N: empty"
+        slot_lines = [
+            line.strip()
+            for line in lines
+            if line.strip() and ": programmed" in line or ": empty" in line
+        ]
+        assert len(slot_lines) == 25
+
+    def test_should_show_empty_for_all_empty_slots(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a macro with all slots empty (the default fixture)
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "10006"])
+
+        # Then: all 25 slots are marked "empty"
+        lines = result.stdout.strip().splitlines()
+        empty_lines = [line.strip() for line in lines if "empty" in line]
+        assert len(empty_lines) == 25
+
+    def test_should_show_programmed_for_nonempty_slots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a macro with some slots programmed
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        a_user_macro(conn, macro_id=10001, name="PARTIAL")
+        # Program slot 1 and slot 11
+        insert_macro_data_row(
+            conn,
+            macro_id=10001,
+            macro_fixture_id=1,
+            data=a_valid_slot_payload(),
+        )
+        insert_macro_data_row(
+            conn,
+            macro_id=10001,
+            macro_fixture_id=11,
+            data=a_valid_slot_payload(),
+        )
+        # Note: the macro already has 25 rows from a_user_macro (all empty).
+        # We just overwrote slots 1 and 11 via UPDATE (the fixture writes
+        # empty rows; we need to UPDATE them, not INSERT).
+        conn.execute(
+            "UPDATE macro_data SET data = ? WHERE macro_id = 10001 AND macro_fixture_id = 1",
+            (a_valid_slot_payload(),),
+        )
+        conn.execute(
+            "UPDATE macro_data SET data = ? WHERE macro_id = 10001 AND macro_fixture_id = 11",
+            (a_valid_slot_payload(),),
+        )
+        conn.close()
+
+        # When: showing the macro
+        result = runner.invoke(cli.app, ["macro", "show", "10001"])
+
+        # Then: slots 1 and 11 are "programmed", the other 23 are "empty"
+        lines = result.stdout.strip().splitlines()
+        programmed_lines = [line.strip() for line in lines if "programmed" in line]
+        empty_lines = [line.strip() for line in lines if "empty" in line]
+        assert len(programmed_lines) == 2
+        assert len(empty_lines) == 23
+
+    def test_should_show_factory_macro_as_preset_factory(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a factory macro with id=61
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "61"])
+
+        # Then: shows as factory preset
+        assert "Preset: factory (1)" in result.stdout
+        assert "FACTORY BEAT" in result.stdout
+
+    def test_should_show_disabled_macro(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a disabled user macro
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        macro_path = make_macro_db(work_dir / "macro.db3")
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        conn = sqlite3.connect(macro_path)
+        insert_macro_row(
+            conn,
+            macro_id=10001,
+            name="DISABLED MACRO",
+            beats=32,
+            preset=0,
+            enabled=0,
+        )
+        for slot_id in ALL_25_SLOT_IDS:
+            insert_macro_data_row(
+                conn, macro_id=10001, macro_fixture_id=slot_id, data=""
+            )
+        conn.close()
+
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "10001"])
+
+        # Then: enabled is "no (0)"
+        assert "Enabled: no (0)" in result.stdout
+
+    @pytest.mark.parametrize("sentinel_id", [-1, 10000])
+    def test_should_not_crash_on_sentinel_ids(
+        self, work_macro_list_db: dict, sentinel_id: int
+    ) -> None:
+        # Given: sentinel rows exist in the DB
+        # When: showing a sentinel id
+        result = runner.invoke(cli.app, ["macro", "show", str(sentinel_id)])
+
+        # Then: no crash, shows the sentinel's metadata
+        assert result.exit_code == 0
+        assert f"Macro {sentinel_id}:" in result.stdout
+
+    def test_should_print_not_found_for_nonexistent_id(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: no macro with id 99999
+        # When: showing it
+        result = runner.invoke(cli.app, ["macro", "show", "99999"])
+
+        # Then: "not found" message, exit 1, no Python traceback
+        assert result.exit_code == 1
+        assert "not found" in result.stdout.lower()
+        assert_no_unhandled_exception(result)
+
+    def test_should_output_yaml_when_yaml_flag_given(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a macro seeded in the working copy
+        # When: showing it with --yaml
+        result = runner.invoke(cli.app, ["macro", "show", "10006", "--yaml"])
+
+        # Then: output is valid YAML containing the macro's name and beats
+        assert result.exit_code == 0
+        assert "name:" in result.stdout
+        assert "HIGH DROP1" in result.stdout
+        assert "beats:" in result.stdout
+        assert "32" in result.stdout
+        assert "fixtures:" in result.stdout
+
+    def test_should_produce_yaml_identical_to_export_macro_yaml(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: a macro seeded in the working copy
+        macro_path = Path(work_macro_list_db["macro_path"])
+        conn = sqlite3.connect(macro_path)
+        expected_yaml = yaml_io.export_macro_yaml(conn, 10006)
+        conn.close()
+
+        # When: showing it with --yaml
+        result = runner.invoke(cli.app, ["macro", "show", "10006", "--yaml"])
+
+        # Then: output matches the existing export function exactly
+        assert result.exit_code == 0
+        assert result.stdout == expected_yaml
+
+    def test_should_be_read_only(self, work_macro_list_db: dict) -> None:
+        # Given: the current macro.db3 bytes
+        original_bytes = Path(work_macro_list_db["macro_path"]).read_bytes()
+
+        # When: running macro show
+        runner.invoke(cli.app, ["macro", "show", "10006"])
+
+        # Then: the database is byte-for-byte unchanged
+        assert Path(work_macro_list_db["macro_path"]).read_bytes() == original_bytes
+
+
+# ---------------------------------------------------------------------------
+# Missing working copy for the three macro discovery commands.
+# ---------------------------------------------------------------------------
+
+
+class TestMissingWorkingCopyForMacroDiscoveryCommands:
+    def test_macro_list_should_error_when_working_copy_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: running macro list
+        result = runner.invoke(cli.app, ["macro", "list"])
+
+        # Then: a clean, handled failure pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "Working copy not found at" in result.stdout
+        assert "Run `rbxlight pull` first." in result.stdout
+
+    def test_macro_search_should_error_when_working_copy_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: running macro search
+        result = runner.invoke(cli.app, ["macro", "search", "TERM"])
+
+        # Then: a clean, handled failure pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "Working copy not found at" in result.stdout
+        assert "Run `rbxlight pull` first." in result.stdout
+
+    def test_macro_show_should_error_when_working_copy_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given: a working-copy directory that was never pulled
+        work_dir = tmp_path / "work-never-pulled"
+        monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+        # When: running macro show
+        result = runner.invoke(cli.app, ["macro", "show", "10006"])
+
+        # Then: a clean, handled failure pointing at the pull step
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+        assert "Working copy not found at" in result.stdout
+        assert "Run `rbxlight pull` first." in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Conflicting flags are rejected cleanly.
+# ---------------------------------------------------------------------------
+
+
+class TestConflictingFlags:
+    def test_macro_list_rejects_all_and_factory_together(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: conflicting --all and --factory flags
+        # When: running macro list with both
+        result = runner.invoke(cli.app, ["macro", "list", "--all", "--factory"])
+
+        # Then: refused cleanly, non-zero exit, no traceback
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_macro_search_rejects_user_and_all_together(
+        self, work_macro_list_db: dict
+    ) -> None:
+        # Given: conflicting --user and --all flags
+        # When: running macro search with both
+        result = runner.invoke(cli.app, ["macro", "search", "TERM", "--user", "--all"])
+
+        # Then: refused cleanly, non-zero exit, no traceback
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)

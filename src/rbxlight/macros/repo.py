@@ -13,6 +13,9 @@ import sqlite3
 
 from rbxlight.models import FIXTURE_SLOT_IDS, FIXTURE_SLOT_TYPES, Macro, MacroData
 
+#: SQL column list shared by every macro SELECT in this module.
+_MACRO_COLUMNS: str = "id, name, beats, fixed, thumbnail, preset, enabled"
+
 #: Default row values for a newly-created user macro.
 _DEFAULT_FIXED: int = 0
 _DEFAULT_THUMBNAIL: str = "USER_SCENE.png"
@@ -28,15 +31,8 @@ class FactoryMacroImmutableError(RuntimeError):
     """Raised when an operation would update/delete a preset=1 macro row."""
 
 
-def get_macro(conn: sqlite3.Connection, macro_id: int) -> Macro:
-    """Fetch a macro row. Must not crash for sentinel ids (-1, 10000)."""
-    row = conn.execute(
-        "SELECT id, name, beats, fixed, thumbnail, preset, enabled "
-        "FROM macro WHERE id = ?",
-        (macro_id,),
-    ).fetchone()
-    if row is None:
-        raise LookupError(f"macro {macro_id} not found")
+def _row_to_macro(row: sqlite3.Row) -> Macro:
+    """Convert a macro SELECT row to a Macro dataclass."""
     return Macro(
         id=row[0],
         name=row[1],
@@ -46,6 +42,26 @@ def get_macro(conn: sqlite3.Connection, macro_id: int) -> Macro:
         preset=row[5],
         enabled=row[6],
     )
+
+
+def _scope_where(scope: str) -> str:
+    """Return the WHERE clause fragment for a scope filter."""
+    if scope == "user":
+        return " WHERE preset = 0"
+    if scope == "factory":
+        return " WHERE preset = 1"
+    return ""
+
+
+def get_macro(conn: sqlite3.Connection, macro_id: int) -> Macro:
+    """Fetch a macro row. Must not crash for sentinel ids (-1, 10000)."""
+    row = conn.execute(
+        f"SELECT {_MACRO_COLUMNS} FROM macro WHERE id = ?",
+        (macro_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError(f"macro {macro_id} not found")
+    return _row_to_macro(row)
 
 
 def list_macro_data(conn: sqlite3.Connection, macro_id: int) -> list[MacroData]:
@@ -142,3 +158,37 @@ def delete_macro(conn: sqlite3.Connection, macro_id: int) -> None:
         )
     conn.execute("DELETE FROM macro_data WHERE macro_id = ?", (macro_id,))
     conn.execute("DELETE FROM macro WHERE id = ?", (macro_id,))
+
+
+def list_macros(conn: sqlite3.Connection, *, scope: str = "user") -> list[Macro]:
+    """List macros filtered by scope, ordered by id ascending.
+
+    scope: "user" (preset=0), "factory" (preset=1), or "all" (both).
+    Returns Macro dataclass instances. Empty DB → empty list.
+    """
+    where = _scope_where(scope)
+    rows = conn.execute(
+        f"SELECT {_MACRO_COLUMNS} FROM macro{where} ORDER BY id"
+    ).fetchall()
+    return [_row_to_macro(row) for row in rows]
+
+
+def search_macros(
+    conn: sqlite3.Connection, term: str, *, scope: str = "user"
+) -> list[Macro]:
+    """Search macros by case-insensitive substring match on name.
+
+    LIKE wildcards in `term` are escaped as literals (backslash-first:
+    ``→ \\, % → \\%, _ → \\_``). scope: "user", "factory", or "all".
+    Ordered by id ascending. Empty DB or no matches → empty list.
+    """
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    where = _scope_where(scope)
+    name_clause = (
+        " AND name LIKE ? ESCAPE '\\'" if where else "WHERE name LIKE ? ESCAPE '\\'"
+    )
+    rows = conn.execute(
+        f"SELECT {_MACRO_COLUMNS} FROM macro {where}{name_clause} ORDER BY id",
+        (f"%{escaped}%",),
+    ).fetchall()
+    return [_row_to_macro(row) for row in rows]

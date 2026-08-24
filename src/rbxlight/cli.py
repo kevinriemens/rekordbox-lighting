@@ -14,10 +14,11 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import typer
 
-from rbxlight import db, safety, sync
+from rbxlight import db, models, safety, sync
 from rbxlight.macros import repo
 from rbxlight.preview import document as preview_document
 from rbxlight.preview import layout as preview_layout
@@ -37,6 +38,19 @@ app.add_typer(venue_app, name="venue")
 
 _MACRO_DB_NAME = "macro.db3"
 _USER_DB_NAME = "user.db3"
+
+
+class _NegativeSafeCommand(typer.core.TyperCommand):
+    """A TyperCommand that accepts negative integer arguments (e.g. -1).
+
+    Standard click/typer treats ``-1`` as an option flag, refusing it as a
+    positional argument.  Setting ``ignore_unknown_options`` on the command's
+    context lets the parser pass ``-1`` through as the argument value.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.context_settings = {"ignore_unknown_options": True}
 
 
 @contextmanager
@@ -84,6 +98,34 @@ def _readonly_working_copy(db_name: str) -> Iterator[sqlite3.Connection]:
 
 def _announce_venue_selection(venue: venues_repo.Venue, source: str) -> None:
     typer.echo(f"Venue: {venue.id} ({venue.name}) — selected via {source}.")
+
+
+def _format_macro_line(macro: repo.Macro) -> str:
+    """Format a macro as a 2-space-indented summary line."""
+    return f"  {macro.id}: {macro.name} ({macro.beats} beats)"
+
+
+def _resolve_macro_scope(
+    *, all: bool, user: bool = False, factory: bool = False, default: str
+) -> str:
+    """Resolve conflicting macro-scope CLI flags to a scope string.
+
+    Checks for conflicting flags first, then returns the resolved scope.
+    Raises typer.Exit(code=1) on conflict.
+    """
+    if all and factory:
+        typer.echo("Flags --all and --factory cannot be used together.")
+        raise typer.Exit(code=1)
+    if user and all:
+        typer.echo("Flags --user and --all cannot be used together.")
+        raise typer.Exit(code=1)
+    if all:
+        return "all"
+    if user:
+        return "user"
+    if factory:
+        return "factory"
+    return default
 
 
 def _format_venue_line(
@@ -641,3 +683,90 @@ def venue_list() -> None:
     typer.echo("Venues:")
     for entry in entries:
         typer.echo(_format_venue_line(entry, active_id=active_id))
+
+
+# ---------------------------------------------------------------------------
+# macro list / macro search / macro show — read-only macro discovery.
+# Never mutates a database; no --write flag, no guard, no backup.
+# ---------------------------------------------------------------------------
+
+
+@macro_app.command("list")
+def macro_list(
+    all: bool = typer.Option(False, "--all", help="Include factory macros."),
+    factory: bool = typer.Option(False, "--factory", help="Factory macros only."),
+) -> None:
+    """List macros in the working copy. Default scope is user-only. Read-only,
+    never writes anything.
+    """
+    scope = _resolve_macro_scope(all=all, factory=factory, default="user")
+
+    with _readonly_working_copy(_MACRO_DB_NAME) as conn:
+        macros = repo.list_macros(conn, scope=scope)
+
+    if not macros:
+        typer.echo("No macros found.")
+        return
+
+    typer.echo("Macros:")
+    for macro in macros:
+        typer.echo(_format_macro_line(macro))
+
+
+@macro_app.command("search")
+def macro_search(
+    term: str,
+    user: bool = typer.Option(False, "--user", help="Search user macros."),
+    all: bool = typer.Option(False, "--all", help="Search all macros."),
+) -> None:
+    """Search macros by name. Default scope is factory — searching by name is
+    how users find factory content. Read-only, never writes anything.
+    """
+    scope = _resolve_macro_scope(all=all, user=user, default="factory")
+
+    with _readonly_working_copy(_MACRO_DB_NAME) as conn:
+        results = repo.search_macros(conn, term, scope=scope)
+
+    if not results:
+        typer.echo("No macros found.")
+        return
+
+    typer.echo("Search results:")
+    for macro in results:
+        typer.echo(_format_macro_line(macro))
+
+
+@macro_app.command("show", cls=_NegativeSafeCommand)
+def macro_show(
+    macro_id: int,
+    yaml: bool = typer.Option(False, "--yaml", help="Output as YAML."),
+) -> None:
+    """Show detailed metadata for a macro. Read-only, never writes anything."""
+    with _readonly_working_copy(_MACRO_DB_NAME) as conn:
+        try:
+            macro = repo.get_macro(conn, macro_id)
+        except LookupError as exc:
+            typer.echo(f"Macro {macro_id} not found.")
+            raise typer.Exit(code=1) from exc
+
+        if yaml:
+            from rbxlight.macros import yaml_io
+
+            typer.echo(yaml_io.export_macro_yaml(conn, macro_id), nl=False)
+            return
+
+        data_rows = repo.list_macro_data(conn, macro_id)
+        data_by_slot = {row.macro_fixture_id: row.xml for row in data_rows}
+
+    preset_label = "user" if macro.preset == 0 else "factory"
+    enabled_label = "yes" if macro.enabled else "no"
+
+    typer.echo(f"Macro {macro.id}: {macro.name}")
+    typer.echo(f"  Beats: {macro.beats}")
+    typer.echo(f"  Preset: {preset_label} ({macro.preset})")
+    typer.echo(f"  Enabled: {enabled_label} ({macro.enabled})")
+    typer.echo("  Fixture slots:")
+    for slot_id in models.FIXTURE_SLOT_IDS:
+        payload = data_by_slot.get(slot_id, "")
+        status = "programmed" if payload else "empty"
+        typer.echo(f"    {slot_id}: {status}")

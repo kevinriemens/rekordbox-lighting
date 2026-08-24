@@ -151,6 +151,9 @@ Reopen rekordbox and your changes are there.
 | See what a change would do | run the command **without** `--write` |
 | Actually apply it | add `--write` |
 | Send the working copy back to rekordbox | `rbxlight push --write` |
+| List my macros | `rbxlight macro list` |
+| Find factory macros by name | `rbxlight macro search CHORUS` |
+| Inspect a macro | `rbxlight macro show 10006` |
 | Delete one of my own macros | `rbxlight macro delete 10007 --write` |
 | Redo the light positions from scratch | `rbxlight layout regenerate --write` |
 | List my backups | `rbxlight restore` |
@@ -165,34 +168,26 @@ Reopen rekordbox and your changes are there.
 **List your own macros:**
 
 ```bash
-python3 -c "
-import sqlite3
-c = sqlite3.connect('file:work/macro.db3?mode=ro', uri=True)
-for r in c.execute('SELECT id, name, beats FROM macro WHERE preset=0 ORDER BY id'):
-    print(r)
-"
+rbxlight macro list
 ```
 
 **Search factory macros by name:**
 
 ```bash
-python3 -c "
-import sqlite3
-c = sqlite3.connect('file:work/macro.db3?mode=ro', uri=True)
-for r in c.execute(\"SELECT id, name FROM macro WHERE name LIKE '%CHORUS%' LIMIT 20\"):
-    print(r)
-"
+rbxlight macro search CHORUS
+```
+
+**Inspect one macro (metadata + which fixture slots are programmed):**
+
+```bash
+rbxlight macro show 10006
+rbxlight macro show 10006 --yaml    # raw YAML export
 ```
 
 **List your venues:**
 
 ```bash
-python3 -c "
-import sqlite3
-c = sqlite3.connect('file:work/user.db3?mode=ro', uri=True)
-for r in c.execute('SELECT id, name FROM venue'):
-    print(r)
-"
+rbxlight venue list
 ```
 
 ---
