@@ -95,7 +95,9 @@ class TestMacroPatternIdAllocation:
         the_27_real_macro_patterns(macro_db_conn)
 
         # When: creating a new bank
-        created = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=9)
+        created = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=9
+        )
 
         # Then: id = 28, never hardcoded
         assert created.id == 28
@@ -108,7 +110,9 @@ class TestMacroPatternIdAllocation:
         non_contiguous_macro_patterns(macro_db_conn)
 
         # When: creating a new bank
-        created = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=9)
+        created = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=9
+        )
 
         # Then: id = 41, one past the true maximum
         assert created.id == 41
@@ -118,7 +122,9 @@ class TestMacroPatternIdAllocation:
     ) -> None:
         # Given: no macro_pattern rows at all
         # When: creating the first bank
-        created = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=1)
+        created = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=1
+        )
 
         # Then: id = 1
         assert created.id == 1
@@ -130,8 +136,12 @@ class TestMacroPatternIdAllocation:
         the_27_real_macro_patterns(macro_db_conn)
 
         # When: creating two new banks back to back
-        first = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=9)
-        second = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=9)
+        first = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=9
+        )
+        second = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=9
+        )
 
         # Then: strictly increasing, no collision
         assert first.id == 28
@@ -142,7 +152,9 @@ class TestMacroPatternIdAllocation:
     ) -> None:
         # Given: an empty table
         # When: creating a bank with the "unknown" pattern value 9
-        created = patterns.create_macro_pattern(macro_db_conn, energy=ENERGY_HIGH, pattern=9)
+        created = patterns.create_macro_pattern(
+            macro_db_conn, energy=ENERGY_HIGH, pattern=9
+        )
 
         # Then: fields round-trip via a fresh read
         fetched = patterns.get_macro_pattern(macro_db_conn, created.id)
@@ -189,7 +201,9 @@ class TestCloneMacroAssign:
         # Given: a HIGH-energy source bank (11 real phases) and an empty
         # target bank row
         a_high_energy_bank(macro_db_conn, pattern_id=1)
-        insert_macro_pattern_row(macro_db_conn, pattern_id=28, energy=ENERGY_HIGH, pattern=9)
+        insert_macro_pattern_row(
+            macro_db_conn, pattern_id=28, energy=ENERGY_HIGH, pattern=9
+        )
 
         # When: cloning phase assignments
         created = patterns.clone_macro_assign(
@@ -207,7 +221,9 @@ class TestCloneMacroAssign:
         # Given: a MID-energy source bank (10 real phases) — a DIFFERENT
         # phase count from the HIGH case above
         a_mid_energy_bank(macro_db_conn, pattern_id=2)
-        insert_macro_pattern_row(macro_db_conn, pattern_id=28, energy=ENERGY_MID, pattern=9)
+        insert_macro_pattern_row(
+            macro_db_conn, pattern_id=28, energy=ENERGY_MID, pattern=9
+        )
 
         # When: cloning phase assignments
         created = patterns.clone_macro_assign(

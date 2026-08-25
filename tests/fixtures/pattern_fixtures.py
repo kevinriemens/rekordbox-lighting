@@ -81,7 +81,9 @@ def a_macro_pattern_with_phases(
     PHASE_COUNT_BY_ENERGY[ENERGY_MID] (10) etc. for a different bank so
     tests can prove phase count is copied, not assumed.
     """
-    insert_macro_pattern_row(conn, pattern_id=pattern_id, energy=energy, pattern=pattern)
+    insert_macro_pattern_row(
+        conn, pattern_id=pattern_id, energy=energy, pattern=pattern
+    )
     for phase in range(1, phase_count + 1):
         insert_macro_assign_row(
             conn,

@@ -100,21 +100,26 @@ Since rekordbox stores no geometry at all, this tool maintains its **own** layou
 
 ## Current slot assignment and its ceiling
 
-Cell → macro fixture slot sequence in venue 2, **identical for both bars**:
+**Corrected 2026-08-25** against a direct read of `work/user.db3` (venue 2, `FullArcCustomBars`) — supersedes the earlier cell-only, inferred version of this table. The earlier table only listed one bar's 9 cells against slot names and inferred the rest; it missed that a third par and both moving-head/bar-cell pairings physically share slots with other fixtures.
 
-| cell # | macro fixture slot | type |
-|---|---|---|
-| 1 | Mirrorball Spot | t5 |
-| 2 | Bar Light 1 | t2 |
-| 3 | Moving Head 1 | t3 |
-| 4 | Par Light 2 | t1 |
-| 5 | Bar Light 2 | t2 |
-| 6 | Moving Head 2 | t3 |
-| 7 | Par Light 3 | t1 |
-| 8 | Bar Light 3 | t2 |
-| 9 | Moving Head 3 | t3 |
+Measured slot occupancy, venue 2:
 
-(Bar 2's assignment shifts slightly around cell 7-9 in the raw data, but is effectively the same sequence.) Because both bars run this same sequence, cell N of bar 1 and cell N of bar 2 always play the identical macro curve at the identical moment — **the two bars always mirror each other**. A chase can ripple across one bar's 9 cells, but it can never diverge from its mirror pair. That mirrored-pair limitation is the known ceiling of the current patch, and the reason the planned `FullArcAI` venue exists — *"left-to-right sweep" was the original framing for breaking the mirror, but see "CRITICAL: the bars do not form one horizontal sweep surface" above: the bars are vertical, on opposite legs, so the actual motion to design for is vertical rise/fall per leg, not a horizontal sweep.*
+| slot | physical fixtures on it |
+|---|---|
+| 16 | bar1 cell 1 + bar2 cell 1 + LPC008S par #3 |
+| 5, 2, 6, 3, 7 | bar cells 2, 4, 5, 7, 8 (both bars) |
+| 11, 12, 13 | LM70S head #1/#2/#3 **and** bar cells 3, 6, 9 (both bars) |
+| 14 | LM70S head #4 — exclusive |
+| 17, 18 | LPC008S par #1, par #2 — exclusive |
+| 111, 112 | bar 1 / bar 2 tilt block — exclusive, **independently controllable** |
+| 1, 4, 8, 9, 10, 15, 19, 101, 102, 105, 106 | nothing — 11 unused slots |
+
+Two facts this correction changes about how macro design must reason about this rig:
+
+1. **Pars are not three independent slots.** The third LPC008S par sits on slot 16 *together with* the bottom bar cells (bar1 cell 1 + bar2 cell 1) — whatever macro curve slot 16 carries drives the floor par and both bars' bottom cell simultaneously. Slot 16 is best read as **"the floor"**, not as a spare par.
+2. **The two bars' tilt blocks (slots 111, 112) are independent slots**, so the two bars CAN diverge in movement even though their cells always mirror. The older blanket claim "the two bars always mirror each other" is only true for the 9 cells (slots 16, 5, 2, 6, 3, 7, 11, 12, 13, which both bars share identically) — it does **not** apply to tilt/movement, which each bar controls through its own slot (111 vs 112) and can run out of phase with the other.
+
+Because slots 11/12/13 host a moving head AND both bars' cells at that position simultaneously, movement (`<Position>`) programmed on those slots is "free" for the shared cells — the cells have no pan/tilt hardware and silently discard it (see "What actually renders" below), while the co-patched LM70S head actually moves. Slot 14 is the only moving head with no co-patched cell, so it is the only slot where brightness/colour is exclusively the head's own, not shared with a cell.
 
 Slots left completely unused in venue 2 (11 of 25):
 
@@ -123,7 +128,7 @@ Par Light 1, Par Light 4, Bar Light 4, Bar Light 5, Bar Light 6, Strobe, Laser,
 Par Light 1 (Simple), Par Light 2 (Simple), Bar Light 1 (Simple), Bar Light 2 (Simple)
 ```
 
-These are exactly the slots available to break the mirror without touching anything already in use.
+(macro_fixture_id: 1, 4, 8, 9, 10, 15, 19, 101, 102, 105, 106.) These are exactly the slots available to break the cell mirror without touching anything already in use.
 
 ## Slot budget arithmetic (for the planned FullArcAI venue)
 
@@ -155,6 +160,8 @@ Constraint on WHERE things can go:
 
 A cell assigned to a Moving Head slot **silently discards** that macro's `<Position>` (and `<Rotate>`/`<Gobo>`) data — the 4ch `18x10W Pixel Bar` profile has no pan/tilt/gobo channels behind it, so only `<Brightness>`, `<Colour>`, and `<Strobe>` actually reach the fixture. This is expected, not a bug: it's precisely why assigning cells to varied slot types (Mirrorball, Bar, Moving Head, Par) produces visual variety in the first place — each slot type's macro was authored with a different brightness/colour personality even where its movement data goes nowhere. Never "fix" this by rewriting a cell's slot to something with matching sections only — the mismatch is the feature.
 
+**Gobo (measured, 20/20 occurrences in `work/macro.db3`):** `<Gobo>` is always the empty self-closing tag — never populated with a wheel index, a colour, or any other payload. There is no known gobo-wheel payload format for this rig's hardware or macro library. The codebase models `<Gobo>` as presence-only (`gobo_present: bool | None` — `None` when the section is absent for a fixture type that doesn't support it, `False` when present-but-empty for one that does; see rekordbox-lightingdb-schema skill). Do not invent gobo content-generation logic — there is nothing observed to generate.
+
 ## Show-diversity baseline (measured, for reference)
 
 2943 tracks total. 60% of them concentrate on just 2 of the 27 `macro_pattern` rows: pattern_id 1 = 39.5% (1162 tracks), pattern_id 7 = 20.7% (610 tracks). Each pattern is an 11-phase loop, so pattern 1 alone is effectively an 11-macro loop repeating across 40% of the library. Top individual macros by fire count: `HIGH CHORUS1 COOL` 5596×, `MID CHORUS COOL` 3517×, `HIGH UP1 COOL` 2924×. 173 of the 190 library macros are used at least once (178 enabled) — the macro *library* is adequate; the *distribution* across patterns/phrases is the actual problem any generation work should target.
@@ -163,3 +170,7 @@ A cell assigned to a Moving Head slot **silently discards** that macro's `<Posit
 
 - Schema and XML payload details: `rekordbox-lightingdb-schema`
 - Backup/write safety rules: `rekordbox-data-safety`
+
+---
+
+**Corrected 2026-08-25:** Replaced the inferred "Current slot assignment and its ceiling" table with a measured slot-occupancy table read directly from `work/user.db3` (venue 2). Two corrections that change macro design: (1) the third LPC008S par shares slot 16 with the bottom bar cells — pars are not three independent slots, slot 16 reads as "the floor"; (2) the bar tilt blocks (slots 111/112) are independent slots and can diverge in movement even though the bars' cells always mirror — the old "the two bars always mirror each other" statement only ever held for the cells. Also added a measured note that `<Gobo>` is always empty (20/20 observed in `work/macro.db3`) and is modeled presence-only.
