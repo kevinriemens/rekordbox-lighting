@@ -57,12 +57,28 @@ ninth bank is only worth the risk if the takeover proves insufficient.
 Work that cannot be delegated — it needs the user at the rig or at rekordbox.
 
 - [ ] **Run the ninth-bank experiment.** Tooling: `rbxlight experiment ninth-bank apply|revert`
-      (shipped 2026-08-25). Sequence: `pull --write` → `experiment ninth-bank apply <source_pattern_id>
-      <content_id>` (dry run, review blast radius) → same with `--write` → `push --write` → launch
-      rekordbox, load the throwaway track, observe → quit → `pull --write` →
-      `experiment ninth-bank revert --write` → `push --write`.
+      (shipped 2026-08-25). Two stages; **stage 1 answers the real question and writes nothing to
+      `user.db3`.**
+
+      **Stage 1 — bank only (the one that matters).** Adds bank `pattern = 9` and nothing else.
+      Sequence: `pull --write` → `experiment ninth-bank apply 19` (dry run, review blast radius) →
+      same with `--write` → `push --write` → launch rekordbox → **look at the mood/bank selector.**
+      Is there a ninth entry? Can you select it and assign it to a track yourself? Then quit →
+      `pull --write` → `experiment ninth-bank revert --write` → `push --write`.
+
+      This is the question worth answering: if the bank is selectable, you assign it yourself and
+      rekordbox writes the `content` row — better evidence than writing it ourselves, because it
+      proves the round trip. `content` holds 2966 rows of irreplaceable user work and stage 1 never
+      touches it.
+
+      **Stage 2 — forced repoint (only if stage 1 says "not selectable").** Adds the optional track
+      argument: `experiment ninth-bank apply 19 <content_id>`. Answers a different, narrower
+      question — does the bank still *play* when assigned programmatically? Worth asking because
+      `rbxlight` writes assignments directly, so UI-selectability is not strictly required for the
+      bank to be usable. Only run this if stage 1 fails and you want that fallback answer.
+
       Use source pattern `19` (CLUB1 HIGH, 10 phases, factory macros — holds macro content constant
-      so the pattern integer is the only variable). Pick a track you genuinely do not care about.
+      so the pattern integer is the only variable).
       **Record the verdict** in `rekordbox-lightingdb-schema/SKILL.md` (the "VERDICT PENDING" section
       is already stubbed and dated), then **delete `src/rbxlight/experiments/`** and its tests — the
       module is disposable by contract and its only job is answering this one question.

@@ -360,13 +360,22 @@ Two things are already established and do not need testing:
 
 The two open hypotheses, both falsifiable in a single rekordbox launch:
 1. **Unreachable** — the mood/bank selector is probably a fixed 8-button row, so the bank could never
-   be selected manually, and touching the selector may snap the track back into `1..8`.
+   be selected manually, and touching the selector may snap an assigned track back into `1..8`.
 2. **Pruned on load** — rekordbox may drop or rewrite rows it does not recognise.
 
+**The question is about selectability, not playback.** The useful outcome is whether the bank shows
+up in the mood/bank selector as something the user can pick and assign. If it does, rekordbox itself
+writes the `content` row, which is stronger evidence than writing one externally because it proves
+the round trip. Force-assigning a track only answers the narrower fallback question — does it still
+play when assigned programmatically — which matters only if the bank turns out to be unreachable in
+the UI.
+
 **Tooling to answer it exists and is committed:** `rbxlight experiment ninth-bank apply|revert`
-(see `src/rbxlight/experiments/ninth_bank.py`). It works entirely on the working copy; promoting to
-live is a separate deliberate `push --write`. When the experiment is run, record the verdict here,
-dated, and delete the experiment module.
+(see `src/rbxlight/experiments/ninth_bank.py`). The default path adds the bank and writes nothing to
+`user.db3` at all — `content` (2966 rows of user work) is untouched unless a track id is explicitly
+passed. It works entirely on the working copy; promoting to live is a separate deliberate
+`push --write`. When the experiment is run, record the verdict here, dated, and delete the
+experiment module.
 
 ## Gotchas
 

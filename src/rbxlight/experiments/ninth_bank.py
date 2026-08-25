@@ -57,8 +57,10 @@ class NoSourceBankError(LookupError):
 
 
 class NoTargetTrackError(LookupError):
-    """Raised when the given content_id has no matching content row —
-    apply refuses before writing anything."""
+    """Raised when a SUPPLIED content_id has no matching content row —
+    apply refuses before writing anything. Never raised when content_id
+    is omitted (the bank-only default) — there is no target to be
+    missing."""
 
 
 class NinthBankAlreadyAppliedError(RuntimeError):
@@ -88,14 +90,17 @@ class CorruptNinthBankStateError(RuntimeError):
 @dataclass(frozen=True)
 class NinthBankState:
     """The exact facts revert() needs to undo an applied ninth-bank
-    change."""
+    change. `content_id` / `original_macro_pattern_id` are both `None`
+    when the apply was bank-only (no track repointed) — they are always
+    both present or both absent, never just one.
+    """
 
     new_pattern_id: int
-    content_id: int
-    original_macro_pattern_id: int
+    content_id: int | None = None
+    original_macro_pattern_id: int | None = None
 
 
-def _state_to_dict(state: NinthBankState) -> dict[str, int]:
+def _state_to_dict(state: NinthBankState) -> dict[str, int | None]:
     return {
         "new_pattern_id": state.new_pattern_id,
         "content_id": state.content_id,
@@ -103,11 +108,23 @@ def _state_to_dict(state: NinthBankState) -> dict[str, int]:
     }
 
 
-def _state_from_dict(data: dict[str, int]) -> NinthBankState:
+def _state_from_dict(data: dict[str, object]) -> NinthBankState:
+    new_pattern_id = data["new_pattern_id"]
+    content_id = data.get("content_id")
+    original_macro_pattern_id = data.get("original_macro_pattern_id")
+
+    if (content_id is None) != (original_macro_pattern_id is None):
+        raise ValueError(
+            "content_id and original_macro_pattern_id must be both present "
+            "or both absent — got a partial track record "
+            f"(content_id={content_id!r}, "
+            f"original_macro_pattern_id={original_macro_pattern_id!r})"
+        )
+
     return NinthBankState(
-        new_pattern_id=data["new_pattern_id"],
-        content_id=data["content_id"],
-        original_macro_pattern_id=data["original_macro_pattern_id"],
+        new_pattern_id=new_pattern_id,  # type: ignore[arg-type]
+        content_id=content_id,  # type: ignore[arg-type]
+        original_macro_pattern_id=original_macro_pattern_id,  # type: ignore[arg-type]
     )
 
 
@@ -182,7 +199,10 @@ def default_state_path() -> Path:
 @dataclass(frozen=True)
 class NinthBankApplyPlan:
     """A typed, immutable description of what `experiment ninth-bank
-    apply` WOULD do — built with zero writes.
+    apply` WOULD do — built with zero writes. `content_id` and
+    `original_macro_pattern_id` are both `None` together on the
+    bank-only (default) path, and both populated together when a target
+    track was supplied — never just one.
     """
 
     new_pattern_id: int
@@ -190,30 +210,36 @@ class NinthBankApplyPlan:
     source_energy: int
     phase_count: int
     source_pattern_id: int
-    content_id: int
-    original_macro_pattern_id: int
     macro_db_path: Path
     user_db_path: Path
+    content_id: int | None = None
+    original_macro_pattern_id: int | None = None
     touches_live: bool = False
 
 
 def build_apply_plan(
     macro_conn: sqlite3.Connection,
-    user_conn: sqlite3.Connection,
+    user_conn: sqlite3.Connection | None = None,
     *,
     source_pattern_id: int,
-    content_id: int,
+    content_id: int | None = None,
     macro_db_path: Path,
     user_db_path: Path,
 ) -> NinthBankApplyPlan:
-    """Build a NinthBankApplyPlan: resolve the source bank and target
-    track, and report exactly what would change (the new bank's id, one
-    past the current max; the phase count, copied from the source; and
-    which single track would be repointed). Performs zero writes.
+    """Build a NinthBankApplyPlan: resolve the source bank and, only if
+    `content_id` is supplied, the target track — reporting exactly what
+    would change (the new bank's id, one past the current max; the phase
+    count, copied from the source; and, if supplied, which single track
+    would be repointed). Performs zero writes.
+
+    Omitting `content_id` (the default) is the bank-only path: `user_conn`
+    is never even touched, and the returned plan carries `content_id`
+    and `original_macro_pattern_id` both `None`.
 
     Raises NoSourceBankError if source_pattern_id has no matching
-    macro_pattern row, or NoTargetTrackError if content_id has no
-    matching content row — either way, nothing is written.
+    macro_pattern row. Raises NoTargetTrackError only when `content_id`
+    IS supplied and has no matching content row — never when it is
+    omitted. Either way, nothing is written.
     """
     try:
         source = patterns.get_macro_pattern(macro_conn, source_pattern_id)
@@ -222,12 +248,16 @@ def build_apply_plan(
             f"source bank (macro_pattern {source_pattern_id}) not found"
         ) from exc
 
-    try:
-        content = phrases_repo.get_content(user_conn, content_id)
-    except LookupError as exc:
-        raise NoTargetTrackError(
-            f"target track (content {content_id}) not found"
-        ) from exc
+    original_macro_pattern_id: int | None = None
+    if content_id is not None:
+        assert user_conn is not None
+        try:
+            content = phrases_repo.get_content(user_conn, content_id)
+        except LookupError as exc:
+            raise NoTargetTrackError(
+                f"target track (content {content_id}) not found"
+            ) from exc
+        original_macro_pattern_id = content.macro_pattern_id
 
     phase_count = len(patterns.list_macro_assign(macro_conn, source_pattern_id))
     new_pattern_id = patterns.next_macro_pattern_id(macro_conn)
@@ -239,7 +269,7 @@ def build_apply_plan(
         phase_count=phase_count,
         source_pattern_id=source_pattern_id,
         content_id=content_id,
-        original_macro_pattern_id=content.macro_pattern_id,
+        original_macro_pattern_id=original_macro_pattern_id,
         macro_db_path=macro_db_path,
         user_db_path=user_db_path,
     )
@@ -247,8 +277,10 @@ def build_apply_plan(
 
 def apply_ninth_bank(plan: NinthBankApplyPlan, *, state_path: Path) -> None:
     """Apply a NinthBankApplyPlan: create the new bank and clone its
-    phase assignments in macro.db3 (one transaction), repoint the target
-    track in user.db3 (a separate transaction), then persist undo state.
+    phase assignments in macro.db3 (always). ONLY if `plan.content_id`
+    is not None does it also repoint the target track in user.db3 (a
+    separate transaction) — the bank-only (default) path never opens a
+    transaction against user.db3 at all. Undo state is then persisted.
 
     Refuses with NinthBankAlreadyAppliedError if a change is already
     outstanding (state_path already holds a record) — checked BEFORE any
@@ -276,10 +308,11 @@ def apply_ninth_bank(plan: NinthBankApplyPlan, *, state_path: Path) -> None:
             target_pattern_id=created_pattern.id,
         )
 
-    with safety.working_copy_write(_USER_DB_NAME) as user_conn:
-        phrases_repo.update_content_macro_pattern_id(
-            user_conn, plan.content_id, created_pattern.id
-        )
+    if plan.content_id is not None:
+        with safety.working_copy_write(_USER_DB_NAME) as user_conn:
+            phrases_repo.update_content_macro_pattern_id(
+                user_conn, plan.content_id, created_pattern.id
+            )
 
     save_ninth_bank_state(
         state_path,
@@ -336,27 +369,31 @@ def build_revert_plan(state_path: Path) -> NinthBankRevertPlan:
 
 def revert_ninth_bank(plan: NinthBankRevertPlan, *, state_path: Path) -> None:
     """Apply a NinthBankRevertPlan: remove the provisional bank and its
-    phase assignments from macro.db3 (one transaction), restore the
-    track's original macro_pattern_id in user.db3 (a separate
-    transaction), then delete the undo-state file.
+    phase assignments from macro.db3 (one transaction). ONLY if
+    `plan.content_id` is not None does it also restore the track's
+    original macro_pattern_id in user.db3 (a separate transaction) — a
+    bank-only apply's revert never opens a transaction against user.db3
+    at all. Then deletes the undo-state file.
 
     A true no-op (no writes at all) when `plan.nothing_to_revert` is True
-    — reverting when nothing was ever applied is always safe.
+    — reverting when nothing was ever applied is always safe. This is
+    independent of whether a track was recorded: a bank-only apply still
+    has something outstanding to revert (the bank itself).
     """
     if plan.nothing_to_revert:
         return
 
     assert plan.new_pattern_id is not None
-    assert plan.content_id is not None
-    assert plan.original_macro_pattern_id is not None
 
     with safety.working_copy_write(_MACRO_DB_NAME) as macro_conn:
         patterns.delete_macro_assign(macro_conn, plan.new_pattern_id)
         patterns.delete_macro_pattern(macro_conn, plan.new_pattern_id)
 
-    with safety.working_copy_write(_USER_DB_NAME) as user_conn:
-        phrases_repo.update_content_macro_pattern_id(
-            user_conn, plan.content_id, plan.original_macro_pattern_id
-        )
+    if plan.content_id is not None:
+        assert plan.original_macro_pattern_id is not None
+        with safety.working_copy_write(_USER_DB_NAME) as user_conn:
+            phrases_repo.update_content_macro_pattern_id(
+                user_conn, plan.content_id, plan.original_macro_pattern_id
+            )
 
     state_path.unlink(missing_ok=True)

@@ -3307,9 +3307,10 @@ class TestConflictingFlags:
 
 # ---------------------------------------------------------------------------
 # `rbxlight experiment ninth-bank` — the one-off, fully-undoable experiment:
-# provisionally add a ninth bank (macro_pattern row, pattern=9) and point one
-# throwaway track at it. Dry run by default, spans macro.db3 + user.db3,
-# never touches live. See rbxlight.experiments.ninth_bank.
+# provisionally add a ninth bank (macro_pattern row, pattern=9). Repointing a
+# track at it is OPTIONAL and OMITTING it is the DEFAULT (bank-only) — see
+# rbxlight.experiments.ninth_bank. Dry run by default; bank-only never opens
+# a transaction against user.db3; never touches live.
 # ---------------------------------------------------------------------------
 
 
@@ -3343,6 +3344,8 @@ def work_ninth_bank_dbs(
 
 
 def _apply_args(dbs: dict, *, write: bool = False) -> list[str]:
+    """CLI args for the opt-in WITH-TRACK shape: source bank + target
+    track both supplied."""
     args = [
         "experiment",
         "ninth-bank",
@@ -3350,6 +3353,15 @@ def _apply_args(dbs: dict, *, write: bool = False) -> list[str]:
         str(dbs["source_pattern_id"]),
         str(dbs["content_id"]),
     ]
+    if write:
+        args.append("--write")
+    return args
+
+
+def _bank_only_apply_args(dbs: dict, *, write: bool = False) -> list[str]:
+    """CLI args for the DEFAULT bank-only shape: target track omitted
+    entirely."""
+    args = ["experiment", "ninth-bank", "apply", str(dbs["source_pattern_id"])]
     if write:
         args.append("--write")
     return args
@@ -3409,10 +3421,11 @@ class TestExperimentNinthBankApplyDryRun:
         assert result.exit_code != 0
         assert_no_unhandled_exception(result)
 
-    def test_should_error_clearly_for_a_nonexistent_target_track(
+    def test_should_error_clearly_for_a_nonexistent_target_track_when_one_is_supplied(
         self, work_ninth_bank_dbs: dict
     ) -> None:
-        # Given: a content_id that doesn't exist
+        # Given: a content_id that was explicitly supplied and doesn't
+        # exist — this error must still fire when a target IS given
         # When: running the command
         result = runner.invoke(
             cli.app,
@@ -3426,6 +3439,79 @@ class TestExperimentNinthBankApplyDryRun:
         )
 
         # Then: a clean, handled failure
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+
+class TestExperimentNinthBankApplyBankOnlyDryRun:
+    """The new DEFAULT surface: the target track argument is omitted
+    entirely. Must never raise the missing-target-track error (there is
+    no target to be missing), and the dry-run plan must make it evident
+    that no track is being repointed.
+    """
+
+    def test_should_change_nothing_without_the_write_flag(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: the current (unwritten-to) working-copy databases
+        macro_bytes_before = Path(work_ninth_bank_dbs["macro_path"]).read_bytes()
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: running bank-only apply (no target track arg) without
+        # --write
+        result = runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs))
+
+        # Then: both databases byte-for-byte unchanged
+        assert result.exit_code == 0
+        assert Path(work_ninth_bank_dbs["macro_path"]).read_bytes() == macro_bytes_before
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_succeed_with_only_the_source_bank_argument(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: only the source bank id is given — no target track at all
+        # When: running the command
+        result = runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs))
+
+        # Then: succeeds — omitting the track is a supported default, not
+        # a missing-argument error
+        assert result.exit_code == 0
+
+    def test_should_report_that_no_track_will_be_repointed(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: no target track supplied
+        # When: running the command
+        result = runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs))
+
+        # Then: still reports the true blast radius (phase count copied
+        # from the source bank) — but it must be evident no track is
+        # being repointed
+        assert "dry run" in result.stdout.lower()
+        assert "--write" in result.stdout
+        assert "11" in result.stdout
+        assert "no track" in result.stdout.lower()
+
+    def test_should_not_create_a_state_file_on_dry_run(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: no --write flag
+        # When: running the command
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs))
+
+        # Then: no undo-state file was created
+        assert not ninth_bank.default_state_path().exists()
+
+    def test_should_error_clearly_for_a_nonexistent_source_bank(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: a source_pattern_id that doesn't exist, no target track
+        # When: running the command
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "apply", "99999"]
+        )
+
+        # Then: a clean, handled failure — refused before writing anything
         assert result.exit_code != 0
         assert_no_unhandled_exception(result)
 
@@ -3480,6 +3566,106 @@ class TestExperimentNinthBankApplyWrite:
 
         # When: applying with --write
         result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: succeeds anyway — proof it never resolved a live path
+        assert result.exit_code == 0
+        assert not nonexistent_live_dir.exists()
+
+
+class TestExperimentNinthBankApplyBankOnlyWrite:
+    def test_should_create_the_new_bank_without_repointing_any_track(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # When: applying bank-only with --write
+        result = runner.invoke(
+            cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True)
+        )
+
+        # Then: succeeds, and the new bank (pattern=9) now exists
+        assert result.exit_code == 0
+        macro_conn = sqlite3.connect(work_ninth_bank_dbs["macro_path"])
+        pattern_9_count = macro_conn.execute(
+            "SELECT COUNT(*) FROM macro_pattern WHERE pattern = 9"
+        ).fetchone()[0]
+        macro_conn.close()
+        assert pattern_9_count == 1
+
+        # And: the pre-existing track was never repointed
+        user_conn = sqlite3.connect(work_ninth_bank_dbs["user_path"])
+        macro_pattern_id = user_conn.execute(
+            "SELECT macro_pattern_id FROM content WHERE id = ?",
+            (work_ninth_bank_dbs["content_id"],),
+        ).fetchone()[0]
+        user_conn.close()
+        assert macro_pattern_id == 1
+
+    def test_should_leave_the_user_database_byte_identical(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: user.db3's bytes before the bank-only apply
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: applying bank-only with --write
+        result = runner.invoke(
+            cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True)
+        )
+
+        # Then: user.db3 is untouched, byte for byte — no transaction was
+        # ever opened against it
+        assert result.exit_code == 0
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_persist_undo_state_so_revert_can_run_later(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # When: applying bank-only with --write
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: an undo-state file now exists on disk
+        assert ninth_bank.default_state_path().exists()
+
+    def test_should_refuse_a_second_bank_only_apply_while_one_is_outstanding(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an already-applied, un-reverted bank-only change
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: applying bank-only again
+        result = runner.invoke(
+            cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True)
+        )
+
+        # Then: refused cleanly, not a crash
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_should_refuse_a_with_track_apply_when_a_bank_only_apply_is_outstanding(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an outstanding bank-only change
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: applying WITH a target track this time
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: refused cleanly — the guard holds across shapes
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_should_never_touch_the_live_lightingdb_directory(
+        self,
+        work_ninth_bank_dbs: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Given: a live directory that does not even exist
+        nonexistent_live_dir = tmp_path / "never-created-live-dir"
+        monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
+
+        # When: applying bank-only with --write
+        result = runner.invoke(
+            cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True)
+        )
 
         # Then: succeeds anyway — proof it never resolved a live path
         assert result.exit_code == 0
@@ -3584,6 +3770,112 @@ class TestExperimentNinthBankRevert:
         # Given: an applied change, and a live directory that does not
         # even exist
         runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+        nonexistent_live_dir = tmp_path / "never-created-live-dir"
+        monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
+
+        # When: reverting with --write
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: succeeds anyway — proof it never resolved a live path
+        assert result.exit_code == 0
+        assert not nonexistent_live_dir.exists()
+
+
+class TestExperimentNinthBankRevertBankOnly:
+    """Reverting a bank-only apply: removes the provisional bank; restores
+    no track, because none was repointed. Must not fail or no-op merely
+    because no track is recorded in the undo state.
+    """
+
+    def test_should_change_nothing_without_the_write_flag(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied bank-only change
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+        macro_bytes_before = Path(work_ninth_bank_dbs["macro_path"]).read_bytes()
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: running revert without --write
+        result = runner.invoke(cli.app, ["experiment", "ninth-bank", "revert"])
+
+        # Then: both databases byte-for-byte unchanged
+        assert result.exit_code == 0
+        assert Path(work_ninth_bank_dbs["macro_path"]).read_bytes() == macro_bytes_before
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_report_a_dry_run_making_clear_no_track_will_be_restored(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied bank-only change
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: running revert without --write
+        result = runner.invoke(cli.app, ["experiment", "ninth-bank", "revert"])
+
+        # Then: told this was a preview, and NOT told "nothing to revert"
+        # — the bank itself is still outstanding even with no track
+        # recorded
+        assert "dry run" in result.stdout.lower()
+        assert "--write" in result.stdout
+        assert "nothing to revert" not in result.stdout.lower()
+
+    def test_should_remove_the_new_bank_and_leave_the_user_database_untouched(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied bank-only change
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: reverting with --write
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: succeeds, no pattern=9 bank remains
+        assert result.exit_code == 0
+        macro_conn = sqlite3.connect(work_ninth_bank_dbs["macro_path"])
+        pattern_9_count = macro_conn.execute(
+            "SELECT COUNT(*) FROM macro_pattern WHERE pattern = 9"
+        ).fetchone()[0]
+        macro_conn.close()
+        assert pattern_9_count == 0
+
+        # And: user.db3 was never touched by either the apply or the
+        # revert — byte-identical to before the whole cycle started
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_allow_a_bank_only_apply_again_after_reverting_one(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: a full bank-only apply -> revert cycle
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
+        runner.invoke(cli.app, ["experiment", "ninth-bank", "revert", "--write"])
+
+        # When: applying bank-only again — ids must reallocate cleanly
+        result = runner.invoke(
+            cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True)
+        )
+
+        # Then: succeeds, not stuck behind the guard
+        assert result.exit_code == 0
+        macro_conn = sqlite3.connect(work_ninth_bank_dbs["macro_path"])
+        pattern_9_count = macro_conn.execute(
+            "SELECT COUNT(*) FROM macro_pattern WHERE pattern = 9"
+        ).fetchone()[0]
+        macro_conn.close()
+        assert pattern_9_count == 1
+
+    def test_should_never_touch_the_live_lightingdb_directory(
+        self,
+        work_ninth_bank_dbs: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Given: an applied bank-only change, and a live directory that
+        # does not even exist
+        runner.invoke(cli.app, _bank_only_apply_args(work_ninth_bank_dbs, write=True))
         nonexistent_live_dir = tmp_path / "never-created-live-dir"
         monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
 

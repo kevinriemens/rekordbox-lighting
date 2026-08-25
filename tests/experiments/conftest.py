@@ -49,3 +49,30 @@ def ninth_bank_work_dir(
         "source_pattern_id": source_pattern_id,
         "content_id": content_id,
     }
+
+
+@pytest.fixture
+def ninth_bank_work_dir_no_tracks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    """Same shape as `ninth_bank_work_dir`, but user.db3 has ZERO content
+    rows. Bank-only apply must never query or write user.db3 at all — this
+    fixture proves it, since there is nothing there for a stray read/write
+    to accidentally touch or silently succeed against.
+    """
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    macro_path = make_macro_db(work_dir / "macro.db3")
+    user_path = make_user_db(work_dir / "user.db3")
+    monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+    macro_conn = sqlite3.connect(macro_path)
+    source_pattern_id = a_high_energy_bank(macro_conn, pattern_id=1)
+    macro_conn.close()
+
+    return {
+        "work_dir": work_dir,
+        "macro_path": macro_path,
+        "user_path": user_path,
+        "source_pattern_id": source_pattern_id,
+    }

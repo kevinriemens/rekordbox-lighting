@@ -179,8 +179,58 @@ delete `src/rbxlight/experiments/` once the verdict is recorded.
 
 None (backend-only, no UI).
 
+## Follow-up, same day: the target track became optional
+
+After the tooling shipped, the user reframed the experiment:
+
+> "Adding another bank does not necessarily mean assigning it to a track. Its goal should just be
+> that I CAN assign it to a track myself and then run that. So the goal of this ninth bank experiment
+> is to verify IF I can assign that and if it's selectable from the menu."
+
+This is a better experiment than the story specified, on three counts. If the bank is not selectable
+in the UI, a forced assignment proves little. If it *is* selectable, the user assigns it and
+rekordbox writes the `content` row itself — stronger evidence than an external write, because it
+proves the round trip. And it removes the riskiest write entirely: `content` holds 2966 rows of
+irreplaceable user work, and the bank-only path never opens `user.db3`.
+
+It also dissolved a real problem. `content` has no track title (`song_id` points into the encrypted
+`master.db`) and no bank has exactly one track, so no track is identifiable from the working copy. I
+had written the user a diff-based procedure to identify a throwaway track. That procedure is now
+unnecessary.
+
+**Change:** the target track went from a required argument to an optional one, and omitting it is the
+default. The capability now has two shapes:
+
+| Stage | Writes | Question |
+|---|---|---|
+| 1 — bank only (default) | `macro.db3` only: +1 `macro_pattern`, +N `macro_assign` | Does bank 9 appear in the mood selector, and can I assign it myself? |
+| 2 — forced repoint (opt-in) | + `user.db3`: 1 `content` row | Only if stage 1 fails: does it still play when assigned programmatically? |
+
+Stage 2 was kept rather than deleted because `rbxlight` writes assignments directly, so
+UI-selectability is not strictly required for the bank to be usable — if bank 9 is unreachable in the
+UI but plays when assigned from the tool, that is still a usable ninth bank.
+
+**Implementation:** `content_id` and `original_macro_pattern_id` became `int | None` across
+`NinthBankApplyPlan`, `NinthBankState`, and both plan builders. `apply_ninth_bank` opens the
+`user.db3` transaction only when a track was supplied; `cli.py` does not even open a read connection
+to it otherwise. `revert` always removes the bank and restores a track only if one was recorded. A
+state file recording no track is valid; one recording only *one* of the two track fields is corrupt
+and raises the existing typed error.
+
+Tested as a refactoring: existing ninth-bank tests were split into with-track and bank-only shapes,
+with a byte-identical-`user.db3` assertion and a spy proving `safety.working_copy_write` is never
+called with `"user.db3"` on the default path. **915 tests, mypy clean, ruff clean.**
+
+**One test defect caught at the gate.** The testing agent wrote a success-path test asserting both
+`exit_code == 0` and `assert_no_unhandled_exception(result)`. That helper asserts
+`isinstance(result.exception, SystemExit)`, which is only true for a *nonzero* exit — its own
+docstring says so. The pair is unsatisfiable for any successful command in this codebase. The backend
+agent correctly escalated instead of editing a frozen test; the assertion was dropped in a scoped
+testing pass. All 41 other call sites were checked and are correct.
+
 ## Outstanding
 
 The experiment's **verdict is still unknown**. The story's acceptance criteria covering Phases 0, 2,
 3 and 4 — backup, observe in rekordbox, re-read, clean up — are satisfiable only by a human at the
-machine. Tracked in `.opencode/BACKLOG.md` under "Open physical sessions".
+machine. Tracked in `.opencode/BACKLOG.md` under "Open physical sessions", now written as the
+two-stage sequence above.

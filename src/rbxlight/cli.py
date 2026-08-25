@@ -772,20 +772,26 @@ def macro_show(
 @ninth_bank_app.command("apply")
 def experiment_ninth_bank_apply(
     source_pattern_id: int,
-    content_id: int,
+    content_id: int | None = typer.Argument(
+        None,
+        help="Track (content id) to repoint at the new bank. Optional — "
+        "omit to add the bank without repointing any track (the default).",
+    ),
     write: bool = typer.Option(
         False, "--write", help="Apply the change. Default is a dry run."
     ),
 ) -> None:
     """Provisionally create a ninth bank (macro_pattern, pattern=9) cloned
-    from an existing bank's phase assignments, and repoint one track at
-    it. Working copy only — never touches live. Refused if a prior apply
-    is still outstanding (run `experiment ninth-bank revert` first).
+    from an existing bank's phase assignments. Repointing a track at it
+    is OPTIONAL — omitting `content_id` (the default) never touches
+    user.db3 at all, not even a read connection. Working copy only —
+    never touches live. Refused if a prior apply is still outstanding
+    (run `experiment ninth-bank revert` first).
     """
     macro_path = db.resolve_path(_MACRO_DB_NAME)
-    user_path = db.resolve_path(_USER_DB_NAME)
     macro_conn = db.connect_readonly(macro_path)
-    user_conn = db.connect_readonly(user_path)
+    user_path = db.resolve_path(_USER_DB_NAME)
+    user_conn = db.connect_readonly(user_path) if content_id is not None else None
     try:
         plan = ninth_bank.build_apply_plan(
             macro_conn,
@@ -801,14 +807,21 @@ def experiment_ninth_bank_apply(
         _fail(f"Target track not found: {exc}", cause=exc)
     finally:
         macro_conn.close()
-        user_conn.close()
+        if user_conn is not None:
+            user_conn.close()
 
-    typer.echo(
+    plan_prefix = (
         f"Plan: add bank pattern={plan.new_pattern_value} (id={plan.new_pattern_id}), "
         f"cloning {plan.phase_count} phase assignment(s) from pattern "
-        f"{plan.source_pattern_id}; repoint content {plan.content_id} "
-        f"(currently pattern {plan.original_macro_pattern_id})."
+        f"{plan.source_pattern_id}; "
     )
+    if plan.content_id is not None:
+        typer.echo(
+            plan_prefix + f"repoint content {plan.content_id} "
+            f"(currently pattern {plan.original_macro_pattern_id})."
+        )
+    else:
+        typer.echo(plan_prefix + "no track will be repointed.")
 
     if not write:
         typer.echo(_DRY_RUN_NOTICE)
@@ -819,10 +832,12 @@ def experiment_ninth_bank_apply(
     except ninth_bank.NinthBankAlreadyAppliedError as exc:
         _fail(str(exc), cause=exc)
 
-    typer.echo(
-        f"Applied: new bank pattern id={plan.new_pattern_id}; "
+    applied_suffix = (
         f"content {plan.content_id} repointed."
+        if plan.content_id is not None
+        else "no track repointed."
     )
+    typer.echo(f"Applied: new bank pattern id={plan.new_pattern_id}; " + applied_suffix)
 
 
 @ninth_bank_app.command("revert")
@@ -832,9 +847,9 @@ def experiment_ninth_bank_revert(
     ),
 ) -> None:
     """Undo an outstanding `experiment ninth-bank apply`: remove the
-    provisional bank and restore the track's original macro_pattern_id.
-    Reads undo state from disk — works even in a separate invocation from
-    the apply that created it.
+    provisional bank and, only if a track was repointed by that apply,
+    restore its original macro_pattern_id. Reads undo state from disk —
+    works even in a separate invocation from the apply that created it.
     """
     state_path = ninth_bank.default_state_path()
     try:
@@ -846,10 +861,13 @@ def experiment_ninth_bank_revert(
         typer.echo("Nothing to revert — no ninth-bank change is outstanding.")
         return
 
-    typer.echo(
-        f"Plan: remove bank pattern id={plan.new_pattern_id}; "
-        f"restore content {plan.content_id} to pattern {plan.original_macro_pattern_id}."
+    plan_suffix = (
+        f"restore content {plan.content_id} to pattern "
+        f"{plan.original_macro_pattern_id}."
+        if plan.content_id is not None
+        else "no track will be restored (none was repointed)."
     )
+    typer.echo(f"Plan: remove bank pattern id={plan.new_pattern_id}; " + plan_suffix)
 
     if not write:
         typer.echo(_DRY_RUN_NOTICE)
