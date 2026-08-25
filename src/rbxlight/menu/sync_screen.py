@@ -11,6 +11,11 @@ from rbxlight.menu.prompts import Prompter
 from rbxlight.menu.render import Renderer
 
 _CHOICES = ("Pull", "Push", "Back")
+_DESCRIPTIONS = {
+    "Pull": "Refresh the working copy from the live database",
+    "Push": "Overwrite the live database from the working copy",
+    "Back": "Return to the previous menu",
+}
 
 
 def _pull(prompter: Prompter, renderer: Renderer) -> None:
@@ -87,7 +92,7 @@ def _push(prompter: Prompter, renderer: Renderer) -> None:
 
 def run(prompter: Prompter, renderer: Renderer) -> None:
     while True:
-        choice = prompter.select("Sync", list(_CHOICES))
+        choice = prompter.select("Sync", list(_CHOICES), descriptions=_DESCRIPTIONS)
         if choice == "Back":
             return
         if choice == "Pull":

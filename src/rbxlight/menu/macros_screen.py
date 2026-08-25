@@ -13,6 +13,14 @@ from rbxlight.menu.render import Renderer
 
 _CHOICES = ("List", "Search", "Show", "Create", "Delete", "Back")
 _SCOPE_CHOICES = ("user", "factory", "all")
+_DESCRIPTIONS = {
+    "List": "List all macros in a scope",
+    "Search": "Search macros by name",
+    "Show": "Show a macro's fixture slot detail",
+    "Create": "Create a new macro in the working copy",
+    "Delete": "Delete a macro from the working copy",
+    "Back": "Return to the previous menu",
+}
 
 
 def _render_working_copy_missing(
@@ -146,7 +154,7 @@ def _delete(prompter: Prompter, renderer: Renderer) -> None:
 
 def run(prompter: Prompter, renderer: Renderer) -> None:
     while True:
-        choice = prompter.select("Macros", list(_CHOICES))
+        choice = prompter.select("Macros", list(_CHOICES), descriptions=_DESCRIPTIONS)
         if choice == "Back":
             return
         if choice == "List":

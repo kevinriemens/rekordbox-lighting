@@ -29,16 +29,39 @@ _TOP_LEVEL_CHOICES = (
     "Exit",
 )
 
+_TOP_LEVEL_DESCRIPTIONS = {
+    "Macros": "List, search, show, create or delete macros",
+    "Preview": "Preview a venue's lighting layout",
+    "Layout": "Regenerate or install a venue's layout",
+    "Venues": "List venues and their fixture counts",
+    "Sync": "Pull from or push to the live database",
+    "Backups": "List or restore live database backups",
+    "Exit": "Quit the menu",
+}
+
+_BANNER = (
+    "       _            _  _         _      _\n"
+    " _ __ | |__  __  __| |(_)  __ _ | |__  | |_\n"
+    "| '__|| '_ \\ \\ \\/ /| || | / _` || '_ \\ | __|\n"
+    "| |   | |_) | >  < | || || (_| || | | || |_\n"
+    "|_|   |_.__/ /_/\\_\\|_||_| \\__, ||_| |_| \\__|\n"
+    "                          |___/  "
+    "rekordbox lighting toolkit\n"
+)
+
 
 def run_menu(prompter: Prompter, renderer: Renderer) -> int:
     """Drive the top-level menu loop until "Exit" is chosen. Returns 0 on
     a clean exit, 130 if a `KeyboardInterrupt` (Ctrl-C) is raised at any
     prompt, matching the shell's conventional SIGINT exit status.
     """
+    renderer.line(_BANNER)
     try:
         while True:
             choice = prompter.select(
-                "What do you want to do?", list(_TOP_LEVEL_CHOICES)
+                "What do you want to do?",
+                list(_TOP_LEVEL_CHOICES),
+                descriptions=_TOP_LEVEL_DESCRIPTIONS,
             )
             if choice == "Exit":
                 return 0

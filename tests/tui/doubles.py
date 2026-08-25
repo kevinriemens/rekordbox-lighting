@@ -14,6 +14,14 @@ queue runs dry (a test asked for more interaction than it scripted — a
 sign the flow diverged from what the test expected). A scripted
 `KeyboardInterrupt` sentinel raises that exception instead of returning
 an answer, simulating Ctrl-C at that exact prompt.
+
+`select()` additionally accepts an optional `descriptions` mapping
+(choice label -> one-line description), recorded verbatim as the 4th
+element of its `calls` tuple. This mirrors the real seam: descriptions
+are supplied per-call by whichever menu level is asking, never resolved
+from a global label lookup. `descriptions` does not affect the choice
+VALUES returned/recorded — those remain exactly the plain `choices`
+list, unchanged.
 """
 
 from __future__ import annotations
@@ -38,8 +46,14 @@ class ScriptedPrompter:
     calls: list[tuple] = field(default_factory=list)
     _index: int = 0
 
-    def _next(self, method: str, message: str, extra: object = None) -> object:
-        self.calls.append((method, message, extra))
+    def _next(
+        self,
+        method: str,
+        message: str,
+        extra: object = None,
+        descriptions: dict[str, str] | None = None,
+    ) -> object:
+        self.calls.append((method, message, extra, descriptions))
         if self._index >= len(self.answers):
             raise AssertionError(
                 f"ScriptedPrompter ran out of answers at call #{self._index} "
@@ -52,8 +66,14 @@ class ScriptedPrompter:
             raise KeyboardInterrupt
         return answer
 
-    def select(self, message: str, choices: list[str]) -> str:
-        return self._next("select", message, tuple(choices))
+    def select(
+        self,
+        message: str,
+        choices: list[str],
+        *,
+        descriptions: dict[str, str] | None = None,
+    ) -> str:
+        return self._next("select", message, tuple(choices), descriptions)
 
     def text(self, message: str, *, default: str | None = None) -> str:
         return self._next("text", message, default)

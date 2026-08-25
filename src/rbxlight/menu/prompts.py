@@ -15,8 +15,18 @@ class Prompter(Protocol):
     prompt, matching `ScriptedPrompter`'s `CTRL_C` sentinel behaviour.
     """
 
-    def select(self, message: str, choices: list[str]) -> str:
-        """Ask the user to pick one of `choices`, return the choice."""
+    def select(
+        self,
+        message: str,
+        choices: list[str],
+        *,
+        descriptions: dict[str, str] | None = None,
+    ) -> str:
+        """Ask the user to pick one of `choices`, return the choice.
+        `descriptions` optionally maps each label to a one-line
+        description shown alongside it; the returned value is always
+        the plain label, never a display string.
+        """
         ...
 
     def text(self, message: str, *, default: str | None = None) -> str:
@@ -43,10 +53,43 @@ class QuestionaryPrompter:
     `CTRL_C` sentinel.
     """
 
-    def select(self, message: str, choices: list[str]) -> str:
+    def select(
+        self,
+        message: str,
+        choices: list[str],
+        *,
+        descriptions: dict[str, str] | None = None,
+    ) -> str:
         import questionary
 
-        answer = questionary.select(message, choices=list(choices)).ask()
+        descriptions = descriptions or {}
+        width = max((len(label) for label in choices), default=0)
+        style = questionary.Style(
+            [
+                ("label", ""),
+                ("description", "fg:#7f7f7f"),
+                ("pointer", "fg:#5f87ff bold"),
+            ]
+        )
+        display_choices = [
+            questionary.Choice(
+                title=[
+                    ("class:label", f"{label:<{width}}"),
+                    ("class:description", f"      {descriptions[label]}"),
+                ]
+                if label in descriptions
+                else [("class:label", label)],
+                value=label,
+            )
+            for label in choices
+        ]
+        answer = questionary.select(
+            message,
+            choices=display_choices,
+            pointer="\u2192",
+            instruction="(\u2191/\u2193 to move, Enter to select)",
+            style=style,
+        ).ask()
         if answer is None:
             raise KeyboardInterrupt
         return str(answer)

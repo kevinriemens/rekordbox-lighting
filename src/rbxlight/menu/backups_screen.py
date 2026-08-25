@@ -9,6 +9,11 @@ from rbxlight.menu.prompts import Prompter
 from rbxlight.menu.render import Renderer
 
 _CHOICES = ("List", "Restore", "Back")
+_DESCRIPTIONS = {
+    "List": "List available live database backups",
+    "Restore": "Restore the live database from a backup",
+    "Back": "Return to the previous menu",
+}
 
 
 def _list(prompter: Prompter, renderer: Renderer) -> None:
@@ -69,7 +74,7 @@ def _restore(prompter: Prompter, renderer: Renderer) -> None:
 
 def run(prompter: Prompter, renderer: Renderer) -> None:
     while True:
-        choice = prompter.select("Backups", list(_CHOICES))
+        choice = prompter.select("Backups", list(_CHOICES), descriptions=_DESCRIPTIONS)
         if choice == "Back":
             return
         if choice == "List":

@@ -15,6 +15,11 @@ from rbxlight.menu.render import Renderer
 from rbxlight.preview import layout as preview_layout
 
 _CHOICES = ("Regenerate", "Install", "Back")
+_DESCRIPTIONS = {
+    "Regenerate": "Rebuild a venue's layout from its fixtures",
+    "Install": "Install an incoming layout file for a venue",
+    "Back": "Return to the previous menu",
+}
 
 
 def _render_venue_error(renderer: Renderer, exc: Exception) -> None:
@@ -134,7 +139,7 @@ def _install(prompter: Prompter, renderer: Renderer) -> None:
 
 def run(prompter: Prompter, renderer: Renderer) -> None:
     while True:
-        choice = prompter.select("Layout", list(_CHOICES))
+        choice = prompter.select("Layout", list(_CHOICES), descriptions=_DESCRIPTIONS)
         if choice == "Back":
             return
         if choice == "Regenerate":
