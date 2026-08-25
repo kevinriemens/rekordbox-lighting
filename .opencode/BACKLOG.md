@@ -20,70 +20,44 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 
 | Story | Epic | Size | One-line |
 |---|---|---|---|
-| `BUGS-ship-margin-fraction-in-preview-payload` | Bugs | S | One source of truth for the 5% margin; browser reads it from the payload. |
 | `FUTURE-bank-takeover-first-pass` | Future | M | COOL bank, HIGH energy (1162 tracks, 39.2%). Repoints `macro_assign` rows; `initial_macro_id` gives free revert. |
-| `REFACTOR-split-preview-layout-module` | Refactor | M | Splits the 955-line `preview/layout.py` into four flat siblings (geometry, segments, placement, io) behind a re-export facade. Pure refactor — all 103 existing tests must pass unmodified. |
-| `TUI-interactive-menu` | TUI | L | `questionary` menu over the domain layer. Full CLI parity, mandatory dry-run → render → confirm on every mutation, louder gate for live writes. |
 | `RIG-calibration-session` | RIG | M | One physical session answering all five rig questions. Observe with rekordbox running, apply every change after quitting it. |
 | `FUTURE-fullarcai-venue` | Future | L | Third venue breaking the bar mirror (bars are mounted vertically, not horizontally, so cells form two columns not one surface). Two arch legs can finally do different things. |
 
-**Tooling shipped 2026-08-25, experiment NOT yet run:** `FUTURE-ninth-bank-experiment` has left this
-table. `rbxlight experiment ninth-bank apply|revert` is committed and tested; what remains is the
-physical half nobody can delegate — launch rekordbox, load the throwaway track, observe, record the
-verdict. See "Open physical sessions" below.
+**Table pruned 2026-08-25.** It had drifted — `BUGS-ship-margin-fraction-in-preview-payload`,
+`REFACTOR-split-preview-layout-module` and `TUI-interactive-menu` were all still listed as ready to
+build despite having shipped on 2026-08-24. They are in `CHANGELOG.md` with audit copies in
+`completed/`. The rows above are now exactly the three files in `.opencode/refined/`; keep it that way.
 
-**TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → ~~`TUI-extract-shared-write-layer`~~ (shipped 2026-08-24)
-→ ~~`TUI-extract-actions-layer`~~ (shipped 2026-08-24) → `TUI-interactive-menu`. Both prerequisites now exist:
-the shared write layer (`safety.write_transaction` with injectable verify, `safety.working_copy_write`,
-typed plan objects) and the shared orchestration layer (`orchestration.resolve_venue` with typed
-not-found/no-active/stale-active errors, `apply_layout_regenerate`, `apply_layout_install`,
-`generate_preview`, plus `PullPlan`/`RestorePlan`/`LayoutRegeneratePlan`/`LayoutInstallPlan`).
-The TUI must call both rather than hand-rolling safety sequencing or re-deriving venue resolution —
-reimplementing either recreates the second-write-path drift these two refactors exist to prevent.
-Note `build_pull_plan`/`build_restore_plan` are unused by `cli.py` on purpose; the TUI is their first consumer.
-
-**Build order note:** `BUGS-ship-margin-fraction-in-preview-payload` is independent of everything else and is the cheapest
-wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
-likely to change the plan. Its finding gates the CLUB1+CLUB2 follow-up and M4.
-
-**Build order note:** the ninth-bank *experiment run* (not its tooling, which is shipped) still sits
-behind `FUTURE-bank-takeover-first-pass`, and may well be cancelled by it. The takeover delivers the
-same practical outcome — customised lighting on a bank the user actually plays — on a bank that is
-already labelled and already selectable, without betting on undocumented rekordbox behaviour. The
-ninth bank is only worth the risk if the takeover proves insufficient.
+**Build order note:** `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and
+the one most likely to change the plan. Its finding gates the CLUB1+CLUB2 follow-up and M4. It is now
+also the *only* remaining route to customised lighting on a playable bank — see the ninth-bank verdict
+below.
 
 ## Open physical sessions
 
 Work that cannot be delegated — it needs the user at the rig or at rekordbox.
 
-- [ ] **Run the ninth-bank experiment.** Tooling: `rbxlight experiment ninth-bank apply|revert`
-      (shipped 2026-08-25). Two stages; **stage 1 answers the real question and writes nothing to
-      `user.db3`.**
+Nothing open. New items go here.
 
-      **Stage 1 — bank only (the one that matters).** Adds bank `pattern = 9` and nothing else.
-      Sequence: `pull --write` → `experiment ninth-bank apply 19` (dry run, review blast radius) →
-      same with `--write` → `push --write` → launch rekordbox → **look at the mood/bank selector.**
-      Is there a ninth entry? Can you select it and assign it to a track yourself? Then quit →
-      `pull --write` → `experiment ninth-bank revert --write` → `push --write`.
+- [x] **Ninth-bank experiment — RUN 2026-08-25. Verdict: NO. Closed, do not reopen.**
+      A probe bank `(id=28, energy=1, pattern=9)` with 10 `macro_assign` rows cloned from bank 19
+      (CLUB1 HIGH) was pushed live and rekordbox was launched.
 
-      This is the question worth answering: if the bank is selectable, you assign it yourself and
-      rekordbox writes the `content` row — better evidence than writing it ourselves, because it
-      proves the round trip. `content` holds 2966 rows of irreplaceable user work and stage 1 never
-      touches it.
+      **It is invisible.** The bank appeared nowhere — not in performance mode, not in macro mapping
+      mode. The mood/bank selector is a fixed 8-button surface, so an unknown `pattern` value has no
+      way in and can never be selected or assigned by hand. Stage 2 (force-repointing a track) was
+      deliberately skipped: a bank you cannot reach from the CDJs mid-set is not worth having, and the
+      bank takeover delivers the same outcome on a bank that is already labelled and already selectable.
 
-      **Stage 2 — forced repoint (only if stage 1 says "not selectable").** Adds the optional track
-      argument: `experiment ninth-bank apply 19 <content_id>`. Answers a different, narrower
-      question — does the bank still *play* when assigned programmatically? Worth asking because
-      `rbxlight` writes assignments directly, so UI-selectability is not strictly required for the
-      bank to be usable. Only run this if stage 1 fails and you want that fallback answer.
+      **It was not pruned.** The row survived rekordbox's launch completely intact, version counters
+      unchanged, nothing else touched. **Storage tolerates unknown rows; the UI is the hard limit.**
+      That rule is the durable result and is recorded in `rekordbox-lightingdb-schema/SKILL.md` and
+      `docs/PROJECT-FOUNDATION.md` §6.2. The DB was reverted to baseline and the disposable
+      `src/rbxlight/experiments/` package and its tests have been deleted.
 
-      Use source pattern `19` (CLUB1 HIGH, 10 phases, factory macros — holds macro content constant
-      so the pattern integer is the only variable).
-      **Record the verdict** in `rekordbox-lightingdb-schema/SKILL.md` (the "VERDICT PENDING" section
-      is already stubbed and dated), then **delete `src/rbxlight/experiments/`** and its tests — the
-      module is disposable by contract and its only job is answering this one question.
-      Do this only if the bank takeover proves insufficient; otherwise close the question as
-      not-worth-the-risk and delete the module anyway.
+      **Runbook erratum:** earlier versions of this item said `pull --write`. `pull` takes no flag —
+      it only ever writes the disposable working copy, so there is no dry-run gate on it.
 
 **Dependencies:**
 - `FUTURE-fullarcai-venue` depends on `RIG-calibration-session`, specifically the item confirming which physical moving head sits on which truss segment. Designing a new fixture-to-slot assignment on an unverified physical mapping risks designing the wrong show.

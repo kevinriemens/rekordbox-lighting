@@ -1,10 +1,10 @@
 """Tests for rbxlight.macros.patterns — macro_pattern (the bank/energy
 combinations) and macro_assign (phase -> concrete macro mapping) read/write.
 
-Permanent, reusable repo functions (NOT specific to the ninth-bank
-experiment — see rekordbox-lighting-architecture skill on repo-vs-
-orchestration placement; rbxlight.experiments.ninth_bank is the disposable
-orchestration built on top of this module).
+Permanent, reusable repo functions — see rekordbox-lighting-architecture
+skill on repo-vs-orchestration placement: this module is the permanent
+repo layer, distinct from disposable one-off orchestration scripts built
+on top of it.
 
 Contract sources: rekordbox-lightingdb-schema skill ("macro_pattern",
 "macro_assign", "How macros get selected for a track") +

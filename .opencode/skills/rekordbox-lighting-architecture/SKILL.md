@@ -81,8 +81,7 @@ src/rbxlight/
   phrases/
     repo.py          content read/write (per-track macro_pattern_id). phrase_data: not yet built
     assign.py        NOT YET BUILT — bulk macro_pattern_id rebalance, phrase reassignment
-  experiments/
-    ninth_bank.py    DISPOSABLE — one-off FUTURE-ninth-bank probe. Delete with the story.
+  experiments/       NOT PRESENT — recreated per probe, deleted with it. See the contract below.
   preview/
     layout.py        stage geometry, fixture placement, normalization, layout JSON persistence
     payload.py       assembles the visualizer payload from macro + venue + layout
@@ -104,6 +103,11 @@ pyproject.toml
 Keep it this flat. This is a personal tool for one rig — no plugin system, no config-driven fixture registry, no abstract "backend" layer. If a new capability doesn't fit an existing package, it's a new top-level package (`macros/`, `venues/`, `phrases/`), not a new layer of indirection inside one.
 
 ### `experiments/` — disposable by contract (added 2026-08-25)
+
+**The package does not currently exist. That is the expected steady state.** Create it when a probe
+needs it, delete it when the probe has answered its question. It existed for a few hours on
+2026-08-25 to hold the ninth-bank probe and was removed the same day once the verdict was recorded —
+the contract working, not an oversight.
 
 `src/rbxlight/experiments/` holds one-off probes that exist to answer a question about rekordbox's
 behaviour, not to deliver a capability. The rules that make it safe to keep in the repo:

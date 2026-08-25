@@ -23,7 +23,6 @@ from typing import Any, NoReturn
 import typer
 
 from rbxlight import db, orchestration, safety, sync
-from rbxlight.experiments import ninth_bank
 from rbxlight.macros import repo
 from rbxlight.preview import layout as preview_layout
 from rbxlight.venues import repo as venues_repo
@@ -40,15 +39,6 @@ app.add_typer(layout_app, name="layout")
 
 venue_app = typer.Typer(help="Venue discovery commands")
 app.add_typer(venue_app, name="venue")
-
-experiment_app = typer.Typer(help="One-off, disposable experiments")
-app.add_typer(experiment_app, name="experiment")
-
-ninth_bank_app = typer.Typer(
-    help="Provisionally add a ninth lighting bank (pattern=9) and repoint "
-    "one track at it — fully reversible, working copy only."
-)
-experiment_app.add_typer(ninth_bank_app, name="ninth-bank")
 
 _MACRO_DB_NAME = "macro.db3"
 _USER_DB_NAME = "user.db3"
@@ -760,118 +750,3 @@ def macro_show(
     for slot in slot_statuses:
         status = "programmed" if slot.programmed else "empty"
         typer.echo(f"    {slot.slot_id}: {status}")
-
-
-# ---------------------------------------------------------------------------
-# experiment ninth-bank apply/revert — see rbxlight.experiments.ninth_bank.
-# Deliberately NOT wired into rbxlight.menu — a one-off experimental
-# command, not a supported interactive-menu action.
-# ---------------------------------------------------------------------------
-
-
-@ninth_bank_app.command("apply")
-def experiment_ninth_bank_apply(
-    source_pattern_id: int,
-    content_id: int | None = typer.Argument(
-        None,
-        help="Track (content id) to repoint at the new bank. Optional — "
-        "omit to add the bank without repointing any track (the default).",
-    ),
-    write: bool = typer.Option(
-        False, "--write", help="Apply the change. Default is a dry run."
-    ),
-) -> None:
-    """Provisionally create a ninth bank (macro_pattern, pattern=9) cloned
-    from an existing bank's phase assignments. Repointing a track at it
-    is OPTIONAL — omitting `content_id` (the default) never touches
-    user.db3 at all, not even a read connection. Working copy only —
-    never touches live. Refused if a prior apply is still outstanding
-    (run `experiment ninth-bank revert` first).
-    """
-    macro_path = db.resolve_path(_MACRO_DB_NAME)
-    macro_conn = db.connect_readonly(macro_path)
-    user_path = db.resolve_path(_USER_DB_NAME)
-    user_conn = db.connect_readonly(user_path) if content_id is not None else None
-    try:
-        plan = ninth_bank.build_apply_plan(
-            macro_conn,
-            user_conn,
-            source_pattern_id=source_pattern_id,
-            content_id=content_id,
-            macro_db_path=macro_path,
-            user_db_path=user_path,
-        )
-    except ninth_bank.NoSourceBankError as exc:
-        _fail(f"Source bank not found: {exc}", cause=exc)
-    except ninth_bank.NoTargetTrackError as exc:
-        _fail(f"Target track not found: {exc}", cause=exc)
-    finally:
-        macro_conn.close()
-        if user_conn is not None:
-            user_conn.close()
-
-    plan_prefix = (
-        f"Plan: add bank pattern={plan.new_pattern_value} (id={plan.new_pattern_id}), "
-        f"cloning {plan.phase_count} phase assignment(s) from pattern "
-        f"{plan.source_pattern_id}; "
-    )
-    if plan.content_id is not None:
-        typer.echo(
-            plan_prefix + f"repoint content {plan.content_id} "
-            f"(currently pattern {plan.original_macro_pattern_id})."
-        )
-    else:
-        typer.echo(plan_prefix + "no track will be repointed.")
-
-    if not write:
-        typer.echo(_DRY_RUN_NOTICE)
-        return
-
-    try:
-        ninth_bank.apply_ninth_bank(plan, state_path=ninth_bank.default_state_path())
-    except ninth_bank.NinthBankAlreadyAppliedError as exc:
-        _fail(str(exc), cause=exc)
-
-    applied_suffix = (
-        f"content {plan.content_id} repointed."
-        if plan.content_id is not None
-        else "no track repointed."
-    )
-    typer.echo(f"Applied: new bank pattern id={plan.new_pattern_id}; " + applied_suffix)
-
-
-@ninth_bank_app.command("revert")
-def experiment_ninth_bank_revert(
-    write: bool = typer.Option(
-        False, "--write", help="Apply the change. Default is a dry run."
-    ),
-) -> None:
-    """Undo an outstanding `experiment ninth-bank apply`: remove the
-    provisional bank and, only if a track was repointed by that apply,
-    restore its original macro_pattern_id. Reads undo state from disk —
-    works even in a separate invocation from the apply that created it.
-    """
-    state_path = ninth_bank.default_state_path()
-    try:
-        plan = ninth_bank.build_revert_plan(state_path)
-    except ninth_bank.CorruptNinthBankStateError as exc:
-        _fail(str(exc), cause=exc)
-
-    if plan.nothing_to_revert:
-        typer.echo("Nothing to revert — no ninth-bank change is outstanding.")
-        return
-
-    plan_suffix = (
-        f"restore content {plan.content_id} to pattern "
-        f"{plan.original_macro_pattern_id}."
-        if plan.content_id is not None
-        else "no track will be restored (none was repointed)."
-    )
-    typer.echo(f"Plan: remove bank pattern id={plan.new_pattern_id}; " + plan_suffix)
-
-    if not write:
-        typer.echo(_DRY_RUN_NOTICE)
-        return
-
-    ninth_bank.revert_ninth_bank(plan, state_path=state_path)
-    typer.echo("Reverted.")

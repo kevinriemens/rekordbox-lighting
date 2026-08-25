@@ -55,8 +55,6 @@ rekordbox-lighting/
 │   │   └── transform.py   → clone, recolor, stretch, mirror
 │   ├── phrases/
 │   │   └── repo.py        → content read/write (per-track macro_pattern_id)
-│   ├── experiments/
-│   │   └── ninth_bank.py  → DISPOSABLE one-off probe; delete once its verdict is recorded
 │   ├── venues/
 │   │   ├── repo.py        → user.db3 venue/fixture read/write
 │   │   ├── models.py      → Venue, Fixture, FixtureSlot dataclasses
@@ -83,7 +81,7 @@ rekordbox-lighting/
 
 **Corrected 2026-08-24:** Split `preview/layout.py` (955 ln) into five flat siblings with one-directional imports: geometry ← segments ← placement ← io ← layout.py facade.
 
-**Corrected 2026-08-25:** Added `macros/patterns.py`, the `phrases/` package (now real, content accessors only), and the `experiments/` package. `experiments/` is disposable by contract — nothing permanent may import from it.
+**Corrected 2026-08-25:** Added `macros/patterns.py` and the `phrases/` package (now real, content accessors only). An `experiments/` package existed briefly the same day for the ninth-bank probe and was deleted once the probe answered its question — that is the contract working as intended, not an oversight. The convention still stands and is documented in the architecture skill; recreate the package when the next probe needs it.
 
 ## Tech Stack
 | Type | Technology |

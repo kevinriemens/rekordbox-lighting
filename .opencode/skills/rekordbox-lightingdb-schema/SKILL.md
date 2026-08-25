@@ -344,38 +344,43 @@ CREATE TABLE lighting_property (
 
 Current max `venue.id` in the live library = **3**. New venues get `id = 4`.
 
-### Is a ninth bank (`pattern = 9`) possible? — VERDICT PENDING (2026-08-25)
+### Is a ninth bank (`pattern = 9`) possible? — ANSWERED: NO (2026-08-25)
 
-`macro_pattern.pattern` is observed to take values `1..8` (the eight named banks) plus `99`
-(INTERLUDE). **Whether rekordbox honours a row with `pattern = 9` is not yet known** — do not
-assume either answer.
+`macro_pattern.pattern` takes values `1..8` (the eight named banks) plus `99` (INTERLUDE).
+**A ninth bank is not usable. Do not attempt one, and do not reopen this.**
 
-Two things are already established and do not need testing:
-- **There is no name column anywhere.** Bank names exist only as the trailing token of factory macro
-  names (`HIGH CHORUS1 COOL`, `CHORUS CLUB1`). A ninth bank therefore has **no name source at all**
-  and would be unlabeled in the UI even if the row is honoured.
-- **Dangling `macro_pattern_id` values already exist and are tolerated.** 61 `content` rows point at
-  `macro_pattern_id = 0`, which has no matching `macro_pattern` row, and rekordbox does not visibly
-  break. Weak but real prior evidence that it does not aggressively validate this FK.
+**Tested directly against the live database on 2026-08-25.** A probe bank `(id=28, energy=1,
+pattern=9)` plus 10 `macro_assign` rows cloned from bank 19 (CLUB1 HIGH, existing factory macros, so
+macro content was held constant and the pattern integer was the only variable) was pushed to live. No
+track was repointed — `content` was never written. rekordbox was launched, inspected, and quit.
 
-The two open hypotheses, both falsifiable in a single rekordbox launch:
-1. **Unreachable** — the mood/bank selector is probably a fixed 8-button row, so the bank could never
-   be selected manually, and touching the selector may snap an assigned track back into `1..8`.
-2. **Pruned on load** — rekordbox may drop or rewrite rows it does not recognise.
+**Result — two distinct findings, both load-bearing:**
 
-**The question is about selectability, not playback.** The useful outcome is whether the bank shows
-up in the mood/bank selector as something the user can pick and assign. If it does, rekordbox itself
-writes the `content` row, which is stronger evidence than writing one externally because it proves
-the round trip. Force-assigning a track only answers the narrower fallback question — does it still
-play when assigned programmatically — which matters only if the bank turns out to be unreachable in
-the UI.
+1. **The bank is invisible. This is the blocking one.** It appeared nowhere: not in performance mode,
+   not in macro mapping mode. Only the eight regular banks showed. The mood/bank selector is a fixed
+   8-button surface, so an unknown `pattern` value has no way in and cannot be selected or assigned by
+   hand. This is independent of the missing name: there is **no name column anywhere** (bank names
+   exist only as the trailing token of factory macro names — `HIGH CHORUS1 COOL`, `CHORUS CLUB1`), so
+   a ninth bank has no label source either.
 
-**Tooling to answer it exists and is committed:** `rbxlight experiment ninth-bank apply|revert`
-(see `src/rbxlight/experiments/ninth_bank.py`). The default path adds the bank and writes nothing to
-`user.db3` at all — `content` (2966 rows of user work) is untouched unless a track id is explicitly
-passed. It works entirely on the working copy; promoting to live is a separate deliberate
-`push --write`. When the experiment is run, record the verdict here, dated, and delete the
-experiment module.
+2. **It was NOT pruned — the row survived untouched.** The backup taken immediately before the revert
+   (a snapshot of live *after* rekordbox had read it) still held row 28 with all 10 `macro_assign`
+   rows, phases 1–10, `macro_id`s byte-identical to the source. `MacroVersionNum` (1061) and
+   `DbVersionNum` (1854) were unchanged. rekordbox did not reject, rewrite, renumber, or repair
+   anything.
+
+**The reusable rule: storage tolerates unknown rows; the UI is the hard limit.** rekordbox ignores
+what it does not recognise rather than repairing it. This matches the 61 `content` rows pointing at
+`macro_pattern_id = 0` (a pattern that has never existed), which have always survived. So when
+planning bank or venue work, the risk to test is whether rekordbox will *display* a thing — not
+whether the data will *survive*, which it does.
+
+Nothing looked broken at any point, and the DB was restored to baseline afterwards (27 patterns, 232
+`macro_assign` rows, the 61 pre-existing orphans unchanged). The probe tooling was disposable and has
+been deleted; `macros/patterns.py` and `phrases/repo.py`, which it was built on, are permanent.
+
+**If you want customised lighting on a bank, take over one of the existing eight** by repointing its
+`macro_assign` rows — `initial_macro_id` preserves the factory value, so the revert is free.
 
 ## Gotchas
 

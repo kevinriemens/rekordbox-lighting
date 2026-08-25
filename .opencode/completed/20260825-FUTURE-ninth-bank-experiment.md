@@ -228,9 +228,58 @@ docstring says so. The pair is unsatisfiable for any successful command in this 
 agent correctly escalated instead of editing a frozen test; the assertion was dropped in a scoped
 testing pass. All 41 other call sites were checked and are correct.
 
-## Outstanding
+## The experiment was run, same day. VERDICT: NO
 
-The experiment's **verdict is still unknown**. The story's acceptance criteria covering Phases 0, 2,
-3 and 4 — backup, observe in rekordbox, re-read, clean up — are satisfiable only by a human at the
-machine. Tracked in `.opencode/BACKLOG.md` under "Open physical sessions", now written as the
-two-stage sequence above.
+The user ran stage 1 and reported: *"The extra bank does not appear. Not in performance mode, nor in
+Macro mapping mode"* and *"Nothing is broken. Everything looks normal. Just like nothing every
+happened. I can just see the regular banks"*.
+
+**Method.** A probe bank `(id=28, energy=1, pattern=9)` plus 10 `macro_assign` rows cloned from bank
+19 (CLUB1 HIGH — existing factory macros, so macro content was held constant and the pattern integer
+was the only variable) was pushed live. No track was repointed; `content` was never written.
+rekordbox was launched, inspected, and quit.
+
+**Finding 1 — invisible. The blocking one.** Bank 9 appeared nowhere. The mood/bank selector is a
+fixed 8-button surface, so an unknown `pattern` value has no way in and can never be selected or
+assigned by hand. This confirms the story's first predicted failure mode. It is independent of the
+missing name: there is no name column anywhere, so a ninth bank has no label source either.
+
+**Finding 2 — not pruned. The reusable one.** The story's second predicted failure mode is refuted.
+Verified forensically from the backups `push` takes automatically: the snapshot immediately preceding
+the revert push — i.e. live *after* rekordbox had read it — still held row 28 with all 10
+`macro_assign` rows, phases 1–10, `macro_id`s `201,201,202,203,204,205,205,206,207,207`,
+byte-identical to the source bank. `MacroVersionNum` (1061) and `DbVersionNum` (1854) unchanged.
+Both pushes passed the rekordbox-not-running guard, so the observation window is bracketed by
+verified-quit states. rekordbox did not reject, rewrite, renumber, or repair anything — it simply
+never looked.
+
+**The durable result: storage tolerates unknown rows; the UI is the hard limit.** rekordbox ignores
+what it does not recognise rather than repairing it, which matches the 61 `content` rows that have
+long pointed at the nonexistent `macro_pattern_id = 0`. So for bank and venue work, the risk worth
+testing is whether rekordbox will *display* a thing — not whether the data will *survive*.
+
+**Stage 2 was deliberately skipped.** A bank that can never be reached from the CDJs mid-set is not
+worth having, and `FUTURE-bank-takeover-first-pass` delivers the same practical outcome on a bank
+that is already labelled and already selectable, with `initial_macro_id` giving a free revert.
+
+**Post-run state.** The DB was reverted and verified back to baseline: 27 `macro_pattern` rows, 232
+`macro_assign` rows, 2966 `content` rows, the 61 pre-existing orphans unchanged, undo state file
+gone.
+
+**Cleanup performed.** `src/rbxlight/experiments/` and `tests/experiments/` were deleted along with
+the `experiment ninth-bank` CLI wiring — the module was disposable by contract and its job is done.
+Suite went 915 → **821 passing**, mypy and ruff clean. The permanent modules the probe was built on,
+`macros/patterns.py` and `phrases/repo.py`, remain and are what
+`FUTURE-bank-takeover-first-pass` will build on.
+
+**Docs updated with the verdict:** `docs/PROJECT-FOUNDATION.md` (§5.8 and §5.9 added to "Assumptions
+that were wrong"; new §6.2 "The ninth bank probe — storage tolerates, the UI decides"; two new §9
+working agreements — "Read the value, don't derive it" and "A bounded experiment that returns NO is a
+success"), `rekordbox-lightingdb-schema/SKILL.md` ("VERDICT PENDING" replaced with "ANSWERED: NO"),
+`.opencode/BACKLOG.md` (item closed; the stale `pull --write` erratum corrected — `pull` takes no
+flag), `.opencode/METADATA.md` and `rekordbox-lighting-architecture/SKILL.md` (`experiments/` marked
+as not-currently-present, contract retained).
+
+**The story succeeded.** It was written to return a documented YES or NO, and it returned NO — closing
+a speculative item permanently rather than leaving it to resurface, and yielding one durable rule
+about rekordbox's behaviour on the way.

@@ -136,12 +136,33 @@ Pan swings beams toward and away from the audience, not just side to side. Handl
 beam vector into a front elevation (with depth foreshortening) plus a top-down plan view — deliberately
 **not** a 3D renderer.
 
+### 5.8 "rekordbox will prune a bank it doesn't recognise" — WRONG (2026-08-25)
+The predicted failure mode for a ninth bank was that rekordbox would drop or rewrite rows it could not
+map to a UI button, possibly taking a heavier hand than just the unknown rows. It does neither. The
+probe row survived a full launch/quit cycle completely untouched (§6). The real limit was the other
+predicted failure mode: **the bank is simply never displayed.** See §5.9 for why that distinction is
+the useful part.
+
+### 5.9 "A phase count can be derived from the bank's energy" — WRONG (2026-08-25)
+The schema skill claimed 11 phases at HIGH energy, 10 at MID, 6 at LOW. Measured against the live DB,
+the two CLUB banks (patterns 7 and 8) have **10 at HIGH, not 11**. Real shape: patterns 1–6 → 11/10/6
+across energies 1/2/3; patterns 7–8 → 10/10/6; pattern 99 → 6/6/6, which sums to the known 232 rows
+(`6×27 + 2×26 + 3×6`). This was the *second* wrong formula for that one column in three days — an
+earlier correction had replaced a uniform `1..11` with the energy rule, which was also wrong. The rule
+now recorded in the skill is: **never compute a phase count, read it from the source bank.** Had the
+formula been trusted, the probe bank would have gained a phantom 11th phase row and contaminated the
+very experiment it was built for.
+
 **The pattern across all of these: the fixtures were modelled correctly, but how they are physically
-mounted was not.** Mounting orientation changes what an axis does.
+mounted was not.** Mounting orientation changes what an axis does. §5.8 and §5.9 add a second pattern:
+**a rule inferred from a tidy subset of the data will hold right up until it doesn't** — measure the
+whole table, and prefer reading a value over deriving it.
 
 ---
 
 ## 6. What was proven against the live database
+
+### 6.1 Macro writes are accepted (2026-08-14)
 
 The riskiest unknown was whether rekordbox would even accept externally-written rows. Verified on
 2026-08-14 by writing two macros — one a byte-identical clone of an existing user macro, one fully
@@ -156,6 +177,43 @@ machine-generated — and confirming both appear in rekordbox.
 
 **Still unproven:** whether a generated macro *renders* as intended during real playback. The preview
 shows our interpretation, not rekordbox's engine.
+
+### 6.2 The ninth bank probe — storage tolerates, the UI decides (2026-08-25)
+
+**Question:** does rekordbox honour a `macro_pattern` row whose `pattern` value (9) has no UI button
+and no factory macro names? The standing worry was that a ninth bank would be either invisible or
+destructive, and the item kept resurfacing because the answer was otherwise unknowable.
+
+**Method.** A throwaway bank was written into the working copy and promoted with `push`: one
+`macro_pattern` row `(id=28, energy=1, pattern=9)` plus 10 `macro_assign` rows cloned from bank 19
+(CLUB1 at HIGH). The clone points at **existing factory macros**, holding macro content constant so
+the pattern integer was the only variable. Deliberately **no track was repointed** — the `content`
+table holds 2966 rows of irreplaceable user work, and the question was whether the bank could be
+selected *by hand*, which a forced assignment would not have answered. rekordbox was launched,
+inspected, and quit; both surrounding pushes passed the "rekordbox not running" guard, so the
+observation window is bracketed by verified-quit states.
+
+**Result: NO — the bank is not selectable.** It appeared nowhere: not in performance mode, not in
+macro mapping mode. Nothing looked broken; the eight regular banks displayed exactly as normal. The
+mood/bank selector is a fixed 8-button surface and an unknown `pattern` value has no way in.
+
+**But it was not pruned — and that is the reusable finding.** The backup taken immediately before the
+revert (i.e. a snapshot of live *after* rekordbox had read it) still contained row 28 with all 10
+`macro_assign` rows, phases 1–10, `macro_id`s byte-identical to the source bank. `MacroVersionNum`
+(1061) and `DbVersionNum` (1854) were unchanged. rekordbox did not reject, rewrite, renumber, or
+repair anything. It simply never looked.
+
+**Established:**
+- the **storage layer tolerates unknown banks; the UI is the hard limit** — the constraint is presentational, not structural
+- rekordbox does not prune `macro_pattern` / `macro_assign` rows it cannot map to a button
+- this is consistent with the 61 pre-existing `content` rows pointing at `macro_pattern_id = 0`, a
+  pattern that has never existed: rekordbox's habit is to **ignore what it doesn't recognise rather
+  than repair it**
+- a ninth bank is therefore dead as a user-facing feature, and the item is closed permanently
+
+**Why this still matters:** every remaining bank/venue idea now writes against a database that is
+known to be additive-tolerant. The risk in that work is whether rekordbox will *show* a thing, not
+whether it will *survive* it — which is a much cheaper class of risk to test.
 
 ---
 
@@ -211,6 +269,12 @@ user-editable by dragging in the visualizer.
 - **The test suite is not sufficient on its own.** Two real bugs passed a green suite because the
   fixtures didn't resemble real data. When a test fixture and reality disagree, fix the fixture.
 - **Preview before pushing to live.** Generation is cheap, wiring up a rig is not.
+- **Read the value, don't derive it.** Two separate wrong formulas for `macro_assign`'s phase count
+  (§5.9) both came from generalising a rule off part of the table. Query the source row instead.
+- **A bounded experiment that returns NO is a success.** The ninth bank probe (§6.2) cost one small
+  reversible write and permanently closed an item that had resurfaced repeatedly. Prefer answering a
+  speculative question cheaply over carrying it indefinitely — and design the probe so the expensive
+  data is never in the blast radius.
 
 ---
 
