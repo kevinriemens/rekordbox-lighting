@@ -14,10 +14,12 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from rbxlight import cli, db, safety
+from rbxlight.experiments import ninth_bank
 from rbxlight.macros import yaml_io
 from rbxlight.preview import layout as preview_layout
 from rbxlight.venues import repo as venues_repo
 from tests.conftest import make_macro_db, make_user_db
+from tests.fixtures.content_fixtures import a_track
 from tests.fixtures.macro_fixtures import (
     ALL_25_SLOT_IDS,
     a_factory_macro,
@@ -27,6 +29,7 @@ from tests.fixtures.macro_fixtures import (
     insert_macro_row,
     sentinel_macro_rows,
 )
+from tests.fixtures.pattern_fixtures import a_high_energy_bank
 from tests.fixtures.venue_fixtures import (
     ACTIVE_VENUE_NAME,
     a_multi_venue_database,
@@ -3300,3 +3303,295 @@ class TestConflictingFlags:
         # Then: refused cleanly, non-zero exit, no traceback
         assert result.exit_code != 0
         assert_no_unhandled_exception(result)
+
+
+# ---------------------------------------------------------------------------
+# `rbxlight experiment ninth-bank` — the one-off, fully-undoable experiment:
+# provisionally add a ninth bank (macro_pattern row, pattern=9) and point one
+# throwaway track at it. Dry run by default, spans macro.db3 + user.db3,
+# never touches live. See rbxlight.experiments.ninth_bank.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def work_ninth_bank_dbs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> dict[str, object]:
+    """A working copy with a HIGH-energy (11-phase) source bank and one
+    target track, wired up as db.WORK_DIR."""
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    macro_path = make_macro_db(work_dir / "macro.db3")
+    user_path = make_user_db(work_dir / "user.db3")
+    monkeypatch.setattr(db, "WORK_DIR", work_dir)
+
+    macro_conn = sqlite3.connect(macro_path)
+    source_pattern_id = a_high_energy_bank(macro_conn, pattern_id=1)
+    macro_conn.close()
+
+    user_conn = sqlite3.connect(user_path)
+    content_id = a_track(user_conn, content_id=1, macro_pattern_id=1)
+    user_conn.close()
+
+    return {
+        "work_dir": work_dir,
+        "macro_path": macro_path,
+        "user_path": user_path,
+        "source_pattern_id": source_pattern_id,
+        "content_id": content_id,
+    }
+
+
+def _apply_args(dbs: dict, *, write: bool = False) -> list[str]:
+    args = [
+        "experiment",
+        "ninth-bank",
+        "apply",
+        str(dbs["source_pattern_id"]),
+        str(dbs["content_id"]),
+    ]
+    if write:
+        args.append("--write")
+    return args
+
+
+class TestExperimentNinthBankApplyDryRun:
+    def test_should_change_nothing_without_the_write_flag(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: the current (unwritten-to) working-copy databases
+        macro_bytes_before = Path(work_ninth_bank_dbs["macro_path"]).read_bytes()
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: running the mutating command without --write
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs))
+
+        # Then: both databases are byte-for-byte unchanged
+        assert result.exit_code == 0
+        assert Path(work_ninth_bank_dbs["macro_path"]).read_bytes() == macro_bytes_before
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_report_the_true_blast_radius_and_how_to_apply(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: no --write flag
+        # When: running the command
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs))
+
+        # Then: told this was a preview, and shown the plan's facts: the
+        # phase-assignment row count (11, from the source bank) and the
+        # target track id
+        assert "dry run" in result.stdout.lower()
+        assert "--write" in result.stdout
+        assert "11" in result.stdout
+        assert str(work_ninth_bank_dbs["content_id"]) in result.stdout
+
+    def test_should_not_create_a_state_file_on_dry_run(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: no --write flag
+        # When: running the command
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs))
+
+        # Then: no undo-state file was created
+        assert not ninth_bank.default_state_path().exists()
+
+    def test_should_error_clearly_for_a_nonexistent_source_bank(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: a source_pattern_id that doesn't exist
+        # When: running the command
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "apply", "99999", "1"]
+        )
+
+        # Then: a clean, handled failure — not an unhandled traceback
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_should_error_clearly_for_a_nonexistent_target_track(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: a content_id that doesn't exist
+        # When: running the command
+        result = runner.invoke(
+            cli.app,
+            [
+                "experiment",
+                "ninth-bank",
+                "apply",
+                str(work_ninth_bank_dbs["source_pattern_id"]),
+                "99999",
+            ],
+        )
+
+        # Then: a clean, handled failure
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+
+class TestExperimentNinthBankApplyWrite:
+    def test_should_create_the_new_bank_and_repoint_the_track(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # When: applying with --write
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: succeeds, and the new bank (pattern=9) now exists
+        assert result.exit_code == 0
+        macro_conn = sqlite3.connect(work_ninth_bank_dbs["macro_path"])
+        pattern_9_count = macro_conn.execute(
+            "SELECT COUNT(*) FROM macro_pattern WHERE pattern = 9"
+        ).fetchone()[0]
+        macro_conn.close()
+        assert pattern_9_count == 1
+
+    def test_should_persist_undo_state_so_revert_can_run_later(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # When: applying with --write
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: an undo-state file now exists on disk
+        assert ninth_bank.default_state_path().exists()
+
+    def test_should_refuse_a_second_apply_while_one_is_outstanding(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an already-applied, un-reverted change
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: applying again
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: refused cleanly, not a crash
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_should_never_touch_the_live_lightingdb_directory(
+        self,
+        work_ninth_bank_dbs: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Given: a live directory that does not even exist
+        nonexistent_live_dir = tmp_path / "never-created-live-dir"
+        monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
+
+        # When: applying with --write
+        result = runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # Then: succeeds anyway — proof it never resolved a live path
+        assert result.exit_code == 0
+        assert not nonexistent_live_dir.exists()
+
+
+class TestExperimentNinthBankRevert:
+    def test_should_change_nothing_without_the_write_flag(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied change
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+        macro_bytes_before = Path(work_ninth_bank_dbs["macro_path"]).read_bytes()
+        user_bytes_before = Path(work_ninth_bank_dbs["user_path"]).read_bytes()
+
+        # When: running revert without --write
+        result = runner.invoke(cli.app, ["experiment", "ninth-bank", "revert"])
+
+        # Then: both databases are byte-for-byte unchanged
+        assert result.exit_code == 0
+        assert Path(work_ninth_bank_dbs["macro_path"]).read_bytes() == macro_bytes_before
+        assert Path(work_ninth_bank_dbs["user_path"]).read_bytes() == user_bytes_before
+
+    def test_should_report_a_dry_run_by_default(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied change
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: running revert without --write
+        result = runner.invoke(cli.app, ["experiment", "ninth-bank", "revert"])
+
+        # Then: told this was a preview
+        assert "dry run" in result.stdout.lower()
+        assert "--write" in result.stdout
+
+    def test_should_restore_the_track_and_remove_the_new_bank_when_write_given(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: an applied change
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+
+        # When: reverting with --write
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: succeeds, the track is back to its original bank, and no
+        # pattern=9 bank remains
+        assert result.exit_code == 0
+        user_conn = sqlite3.connect(work_ninth_bank_dbs["user_path"])
+        macro_pattern_id = user_conn.execute(
+            "SELECT macro_pattern_id FROM content WHERE id = ?",
+            (work_ninth_bank_dbs["content_id"],),
+        ).fetchone()[0]
+        user_conn.close()
+        assert macro_pattern_id == 1
+
+        macro_conn = sqlite3.connect(work_ninth_bank_dbs["macro_path"])
+        pattern_9_count = macro_conn.execute(
+            "SELECT COUNT(*) FROM macro_pattern WHERE pattern = 9"
+        ).fetchone()[0]
+        macro_conn.close()
+        assert pattern_9_count == 0
+
+    def test_should_report_nothing_to_revert_when_no_change_is_outstanding(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: no prior apply
+        # When: reverting with --write
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: a clean, non-crashing "nothing to revert" message
+        assert result.exit_code == 0
+        assert "nothing to revert" in result.stdout.lower()
+
+    def test_should_error_clearly_for_a_corrupt_state_file(
+        self, work_ninth_bank_dbs: dict
+    ) -> None:
+        # Given: a malformed undo-state file
+        state_path = ninth_bank.default_state_path()
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text("{ not valid json")
+
+        # When: reverting
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: a clean, handled failure — not an unhandled traceback
+        assert result.exit_code != 0
+        assert_no_unhandled_exception(result)
+
+    def test_should_never_touch_the_live_lightingdb_directory(
+        self,
+        work_ninth_bank_dbs: dict,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Given: an applied change, and a live directory that does not
+        # even exist
+        runner.invoke(cli.app, _apply_args(work_ninth_bank_dbs, write=True))
+        nonexistent_live_dir = tmp_path / "never-created-live-dir"
+        monkeypatch.setattr(db, "LIGHTINGDB", nonexistent_live_dir)
+
+        # When: reverting with --write
+        result = runner.invoke(
+            cli.app, ["experiment", "ninth-bank", "revert", "--write"]
+        )
+
+        # Then: succeeds anyway — proof it never resolved a live path
+        assert result.exit_code == 0
+        assert not nonexistent_live_dir.exists()

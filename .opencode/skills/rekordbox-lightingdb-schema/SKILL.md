@@ -313,7 +313,21 @@ CREATE TABLE lighting_property (
 ### How macros get selected for a track
 
 1. `content.macro_pattern_id` selects one of the 27 rows in `macro_pattern` for that track. `macro_pattern = energy(1..3) × style(1..8, 99)` — 3 × 9 = 27 rows total.
-2. `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` maps `(pattern, phase)` → a concrete `macro_id`. **The number of phases is NOT uniform — it depends on the pattern's `energy`:** 11 phases for energy 1 (HIGH), 10 for energy 2 (MID), 6 for energy 3 (LOW), and 6 for the INTERLUDE set (`pattern=99`). Measured live total: **232 rows**, not 27 × 11. Anything validating a phase number must derive the upper bound from the pattern's energy; a hardcoded `1..11` accepts phase 11 on a MID pattern, which does not exist. *(Corrected 2026-08-23 against the live DBs — this section previously documented a uniform `1..11`.)*
+2. `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` maps `(pattern, phase)` → a concrete `macro_id`. **The number of phases is NOT uniform, and it is NOT derivable from `energy` alone.** Measured live total: **232 rows**, not 27 × 11.
+
+   Measured per-row phase counts (`macro_pattern.id` → count):
+
+   | pattern | energy 1 (HIGH) | energy 2 (MID) | energy 3 (LOW) |
+   |---|---|---|---|
+   | 1..6 (COOL, NATURAL, HOT, SUBTLE, WARM, VIVID) | **11** | 10 | 6 |
+   | 7, 8 (CLUB1, CLUB2) | **10** | 10 | 6 |
+   | 99 (INTERLUDE) | 6 | 6 | 6 |
+
+   Check: `6×(11+10+6) + 2×(10+10+6) + 3×6 = 162 + 52 + 18 = 232`. ✔
+
+   **Never compute a phase count — read it.** `SELECT COUNT(*) FROM macro_assign WHERE macro_pattern_id = ?`, or copy the source row set wholesale. Any code that derives the upper bound from a formula will be wrong for the two CLUB banks.
+
+   *(Corrected 2026-08-23: this section previously documented a uniform `1..11`. **Corrected again 2026-08-25** — the 2026-08-23 fix replaced one formula with another, claiming energy alone determines the count, i.e. "11 phases for energy 1". That is wrong for patterns 7 and 8, which have 10 at HIGH. Re-verified 2026-08-25 by direct query. The lesson the two corrections share: this column has no rule, only data.)*
 3. `phrase_data(content_id, phrase_num, macro_id, initial_macro_id)` is the **per-track override** layer, keyed by `(content_id, phrase_num)`. `phrase_num` observed range is `1..99`. This is what actually fires during playback for a given phrase of a given track — it starts as a copy of the pattern/phase assignment but can be hand-edited per track.
 
    ⚠️ **`phrase_data` is user work and must never be clobbered.** Because it is the layer that actually fires, it also *shadows* `macro_assign`: changing a bank's assignment does not necessarily change what an already-analyzed track plays. Any feature that rewrites `macro_assign` must treat existing `phrase_data` rows as authoritative and leave them alone, and must be honest that its effect on already-analyzed tracks is not guaranteed. Whether rekordbox ever re-copies `macro_assign` into `phrase_data` (on re-analysis? on a UI action?) is **not yet established** — determine it empirically before promising a behaviour.
@@ -329,6 +343,30 @@ CREATE TABLE lighting_property (
 | `AsyncLastMacroId` | — | last macro id touched by async operation |
 
 Current max `venue.id` in the live library = **3**. New venues get `id = 4`.
+
+### Is a ninth bank (`pattern = 9`) possible? — VERDICT PENDING (2026-08-25)
+
+`macro_pattern.pattern` is observed to take values `1..8` (the eight named banks) plus `99`
+(INTERLUDE). **Whether rekordbox honours a row with `pattern = 9` is not yet known** — do not
+assume either answer.
+
+Two things are already established and do not need testing:
+- **There is no name column anywhere.** Bank names exist only as the trailing token of factory macro
+  names (`HIGH CHORUS1 COOL`, `CHORUS CLUB1`). A ninth bank therefore has **no name source at all**
+  and would be unlabeled in the UI even if the row is honoured.
+- **Dangling `macro_pattern_id` values already exist and are tolerated.** 61 `content` rows point at
+  `macro_pattern_id = 0`, which has no matching `macro_pattern` row, and rekordbox does not visibly
+  break. Weak but real prior evidence that it does not aggressively validate this FK.
+
+The two open hypotheses, both falsifiable in a single rekordbox launch:
+1. **Unreachable** — the mood/bank selector is probably a fixed 8-button row, so the bank could never
+   be selected manually, and touching the selector may snap the track back into `1..8`.
+2. **Pruned on load** — rekordbox may drop or rewrite rows it does not recognise.
+
+**Tooling to answer it exists and is committed:** `rbxlight experiment ninth-bank apply|revert`
+(see `src/rbxlight/experiments/ninth_bank.py`). It works entirely on the working copy; promoting to
+live is a separate deliberate `push --write`. When the experiment is run, record the verdict here,
+dated, and delete the experiment module.
 
 ## Gotchas
 

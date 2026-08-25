@@ -49,9 +49,14 @@ rekordbox-lighting/
 │   ├── colors.py          → signed int32 ARGB ↔ rgb/hex
 │   ├── macros/
 │   │   ├── repo.py        → macro.db3 read/write, id allocation, 25-row enforcement
+│   │   ├── patterns.py    → macro_pattern / macro_assign read/write (banks + phase rows)
 │   │   ├── yaml_io.py     → macro ↔ YAML export/import
 │   │   ├── generate.py    → pure primitives: chase, sweep, pingpong, colour_cycle, strobe_hit, build
 │   │   └── transform.py   → clone, recolor, stretch, mirror
+│   ├── phrases/
+│   │   └── repo.py        → content read/write (per-track macro_pattern_id)
+│   ├── experiments/
+│   │   └── ninth_bank.py  → DISPOSABLE one-off probe; delete once its verdict is recorded
 │   ├── venues/
 │   │   ├── repo.py        → user.db3 venue/fixture read/write
 │   │   ├── models.py      → Venue, Fixture, FixtureSlot dataclasses
@@ -77,6 +82,8 @@ rekordbox-lighting/
 **Corrected 2026-08-23:** Removed non-existent `phrases/` module; added `sync.py`, `venues/models.py`, and `preview/` package with all submodules; added `work/` directory.
 
 **Corrected 2026-08-24:** Split `preview/layout.py` (955 ln) into five flat siblings with one-directional imports: geometry ← segments ← placement ← io ← layout.py facade.
+
+**Corrected 2026-08-25:** Added `macros/patterns.py`, the `phrases/` package (now real, content accessors only), and the `experiments/` package. `experiments/` is disposable by contract — nothing permanent may import from it.
 
 ## Tech Stack
 | Type | Technology |

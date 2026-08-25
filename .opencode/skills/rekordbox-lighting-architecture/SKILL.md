@@ -21,14 +21,22 @@ The project works against a **working copy**, not live rekordbox data. Normal op
 CLI command -> safety.working_copy_write(work/…) -> repo write in one transaction -> verify by re-read
 
 # the only path to live
-push -> safety.write_transaction(LIVE, verify=...) 
-     -> guard_rekordbox_not_running() -> backup_live_databases() -> BEGIN
-     -> apply to live -> verify(conn) inside txn -> COMMIT -> print restore command
+push -> guard_rekordbox_not_running() -> verify_not_stale() -> backup_live_databases()
+     -> shutil.copy2 work/<db> -> live/<db>, per file
+     -> sha256 verify each copied file -> print restore command
 ```
+
+**Corrected 2026-08-25:** this block previously claimed `push` goes through
+`safety.write_transaction(LIVE, verify=...)`. It does not, and never has.
+`sync.push()` promotes the working copy by **whole-file copy** (`shutil.copy2`), not by a
+row-level SQL transaction — which is why it can move `macro.db3` and `user.db3` together.
+`safety.write_transaction` is a real, tested primitive with **zero production callers**; it
+exists for a future row-level live write that does not yet exist. Do not cite it as the
+description of `push`.
 
 **Two-tier write model:**
 - **`safety.working_copy_write(db_name)`** — context manager for the disposable working copy (`work/`). No guard, no backup. Use for macro create/delete, layout regenerate/install, and all normal commands.
-- **`safety.write_transaction(db_name, trigger_command, verify=None)`** — context manager for live rekordbox DBs. Enforces: guard rekordbox not running → backup all → BEGIN → yield → verify(conn) inside txn → COMMIT. On exception: rollback + print restore instructions + re-raise. The `verify` parameter is an injectable hook (default: no-op) for operation-specific validation.
+- **`safety.write_transaction(db_name, trigger_command, verify=None)`** — context manager for row-level writes to a live rekordbox DB. **Currently has no production callers** (`push` uses whole-file copy, see above); it is fully tested and available for the first command that genuinely needs to write single rows to live. Enforces: guard rekordbox not running → backup all → BEGIN → yield → verify(conn) inside txn → COMMIT. On exception: rollback + print restore instructions + re-raise. The `verify` parameter is an injectable hook (default: no-op) for operation-specific validation.
 
 `pull` and `push` in `sync.py` are the ONLY code paths permitted to open a live database. Everything else resolves paths to `work/`. A module reaching for a live path outside `sync.py` is a defect — it bypasses the working-copy safety net that makes every other command harmless to run.
 
@@ -63,6 +71,7 @@ src/rbxlight/
   colors.py          signed int32 ARGB <-> rgb/hex conversion
   macros/
     repo.py          macro.db3 read/write, id allocation, 25-row invariant enforcement
+    patterns.py      macro_pattern / macro_assign read/write — banks, energies, phase rows
     yaml_io.py       macro <-> YAML export/import
     generate.py      primitives: chase, sweep, pingpong, colour_cycle, strobe_hit, build
     transform.py     clone, recolor, stretch, mirror
@@ -70,8 +79,10 @@ src/rbxlight/
     repo.py          user.db3 venue/fixture read/write
     builder.py       FullArcAI venue generation, slot allocation solver
   phrases/
-    repo.py          content + phrase_data read/write
-    assign.py        bulk macro_pattern_id rebalance, phrase reassignment
+    repo.py          content read/write (per-track macro_pattern_id). phrase_data: not yet built
+    assign.py        NOT YET BUILT — bulk macro_pattern_id rebalance, phrase reassignment
+  experiments/
+    ninth_bank.py    DISPOSABLE — one-off FUTURE-ninth-bank probe. Delete with the story.
   preview/
     layout.py        stage geometry, fixture placement, normalization, layout JSON persistence
     payload.py       assembles the visualizer payload from macro + venue + layout
@@ -92,13 +103,28 @@ pyproject.toml
 
 Keep it this flat. This is a personal tool for one rig — no plugin system, no config-driven fixture registry, no abstract "backend" layer. If a new capability doesn't fit an existing package, it's a new top-level package (`macros/`, `venues/`, `phrases/`), not a new layer of indirection inside one.
 
+### `experiments/` — disposable by contract (added 2026-08-25)
+
+`src/rbxlight/experiments/` holds one-off probes that exist to answer a question about rekordbox's
+behaviour, not to deliver a capability. The rules that make it safe to keep in the repo:
+
+- **Nothing permanent may import from `experiments/`.** The dependency arrow only ever points inward
+  (`experiments/` → `macros/`, `phrases/`, `safety`, `db`). This is what makes a module here
+  deletable in a single commit once its question is answered.
+- **Reusable logic does not live here.** If a probe needs a real capability (e.g. cloning
+  `macro_assign` rows), that capability goes in the permanent repo module and the probe calls it.
+  What stays in `experiments/` is only the glue: the plan, the apply/revert pair, and the undo state.
+- **Same safety rules as everything else.** Working copy only, dry-run by default, `--write` opt-in.
+  A probe is not a licence to skip the write model.
+
 ## Where to Put New Code
 
 | I need to... | Goes in |
 |---|---|
 | Add a new CLI command | `cli.py` |
 | Write to working copy (macro create/delete, layout regen) | `safety.working_copy_write(db_name)` context manager |
-| Write to live rekordbox DBs (only in `sync.py` push path) | `safety.write_transaction(db_name, trigger_command, verify=...)` context manager |
+| Promote the working copy to live | `sync.push()` — whole-file copy, the only live write path that exists |
+| Row-level write to a live DB (nothing does this yet) | `safety.write_transaction(db_name, trigger_command, verify=...)` context manager |
 | Open, read, or write any `.db3` file handle | `db.py` (read helpers) / `safety.py` (write context managers) — nowhere else |
 | Move data between live and working copy | `sync.py` |
 | Resolve which DB path to use (work vs live) | `db.py` (default: work) |
@@ -106,6 +132,9 @@ Keep it this flat. This is a personal tool for one rig — no plugin system, no 
 | Add a new macro shape/pattern (chase, sweep, ...) | `macros/generate.py` |
 | Modify an existing macro (clone, recolor, stretch) | `macros/transform.py` |
 | Change macro storage, id allocation, YAML round-trip | `macros/repo.py` / `macros/yaml_io.py` |
+| Read/write banks — `macro_pattern` rows, `macro_assign` phase rows | `macros/patterns.py` |
+| Read/write a track's bank assignment (`content.macro_pattern_id`) | `phrases/repo.py` |
+| A throwaway, single-story probe of unknown rekordbox behaviour | `experiments/<name>.py` (see below) |
 | Venue, fixture, or patch logic | `venues/repo.py` (storage) or `venues/builder.py` (generation) |
 | Colour math (ARGB <-> hex/rgb) | `colors.py` |
 | Stage/truss geometry, fixture auto-placement, layout file persistence | `preview/layout*.py` (see flat-structure section) |

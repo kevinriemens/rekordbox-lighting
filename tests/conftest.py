@@ -24,7 +24,10 @@ def _guard_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# macro.db3 throwaway schema
+# macro.db3 throwaway schema — macro/macro_data/macro_fixture plus
+# macro_pattern/macro_assign (the bank/energy combinations and their
+# phase-assignment rows the ninth-bank experiment reads/writes). See
+# rekordbox-lightingdb-schema skill ("macro.db3 tables").
 # ---------------------------------------------------------------------------
 
 MACRO_DB_SCHEMA = """
@@ -49,6 +52,20 @@ CREATE TABLE macro_fixture (
   id              INTEGER PRIMARY KEY,
   name            TEXT,
   fixture_type_id INTEGER
+);
+
+CREATE TABLE macro_pattern (
+  id      INTEGER PRIMARY KEY,
+  energy  INTEGER,
+  pattern INTEGER
+);
+
+CREATE TABLE macro_assign (
+  macro_pattern_id INTEGER,
+  phase            INTEGER,
+  macro_id         INTEGER,
+  initial_macro_id INTEGER,
+  PRIMARY KEY (macro_pattern_id, phase)
 );
 """
 
@@ -119,8 +136,9 @@ def macro_db_conn(macro_db_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# user.db3 throwaway schema — venue/fixture patch + lighting_property, the
-# subset of user.db3 the preview-export feature reads. See
+# user.db3 throwaway schema — venue/fixture patch, lighting_property, and
+# content (the per-track bank assignment table), the subset of user.db3
+# the preview-export feature and the ninth-bank experiment read/write. See
 # rekordbox-lightingdb-schema skill ("user.db3 tables").
 # ---------------------------------------------------------------------------
 
@@ -155,6 +173,13 @@ CREATE TABLE fixture (
 CREATE TABLE lighting_property (
   key   TEXT PRIMARY KEY,
   value TEXT
+);
+
+CREATE TABLE content (
+  id               INTEGER PRIMARY KEY,
+  song_id          INTEGER,
+  master_db_id     INTEGER,
+  macro_pattern_id INTEGER
 );
 """
 

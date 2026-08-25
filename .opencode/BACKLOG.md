@@ -26,7 +26,11 @@ Specs are in `.opencode/refined/`. Detail lives in the story files — these are
 | `TUI-interactive-menu` | TUI | L | `questionary` menu over the domain layer. Full CLI parity, mandatory dry-run → render → confirm on every mutation, louder gate for live writes. |
 | `RIG-calibration-session` | RIG | M | One physical session answering all five rig questions. Observe with rekordbox running, apply every change after quitting it. |
 | `FUTURE-fullarcai-venue` | Future | L | Third venue breaking the bar mirror (bars are mounted vertically, not horizontally, so cells form two columns not one surface). Two arch legs can finally do different things. |
-| `FUTURE-ninth-bank-experiment` | Future | S | Bounded, reversible experiment: does rekordbox honour a `macro_pattern` row with `pattern = 9`? Deliverable is a documented YES or NO, not a shipped command. Run it after the takeover. |
+
+**Tooling shipped 2026-08-25, experiment NOT yet run:** `FUTURE-ninth-bank-experiment` has left this
+table. `rbxlight experiment ninth-bank apply|revert` is committed and tested; what remains is the
+physical half nobody can delegate — launch rekordbox, load the throwaway track, observe, record the
+verdict. See "Open physical sessions" below.
 
 **TUI build order:** ~~`CLI_COMPLETENESS-macro-discovery-commands`~~ (shipped 2026-08-24) → ~~`TUI-extract-shared-write-layer`~~ (shipped 2026-08-24)
 → ~~`TUI-extract-actions-layer`~~ (shipped 2026-08-24) → `TUI-interactive-menu`. Both prerequisites now exist:
@@ -42,11 +46,28 @@ Note `build_pull_plan`/`build_restore_plan` are unused by `cli.py` on purpose; t
 wins. `FUTURE-bank-takeover-first-pass` is the highest-value item in this file and the one most
 likely to change the plan. Its finding gates the CLUB1+CLUB2 follow-up and M4.
 
-**Build order note:** `FUTURE-ninth-bank-experiment` runs after `FUTURE-bank-takeover-first-pass`, and may well be
-cancelled by it. The takeover delivers the same practical outcome — customised lighting on a bank
-the user actually plays — on a bank that is already labelled and already selectable, without
-betting on undocumented rekordbox behaviour. The ninth bank is only worth the risk if the takeover
-proves insufficient.
+**Build order note:** the ninth-bank *experiment run* (not its tooling, which is shipped) still sits
+behind `FUTURE-bank-takeover-first-pass`, and may well be cancelled by it. The takeover delivers the
+same practical outcome — customised lighting on a bank the user actually plays — on a bank that is
+already labelled and already selectable, without betting on undocumented rekordbox behaviour. The
+ninth bank is only worth the risk if the takeover proves insufficient.
+
+## Open physical sessions
+
+Work that cannot be delegated — it needs the user at the rig or at rekordbox.
+
+- [ ] **Run the ninth-bank experiment.** Tooling: `rbxlight experiment ninth-bank apply|revert`
+      (shipped 2026-08-25). Sequence: `pull --write` → `experiment ninth-bank apply <source_pattern_id>
+      <content_id>` (dry run, review blast radius) → same with `--write` → `push --write` → launch
+      rekordbox, load the throwaway track, observe → quit → `pull --write` →
+      `experiment ninth-bank revert --write` → `push --write`.
+      Use source pattern `19` (CLUB1 HIGH, 10 phases, factory macros — holds macro content constant
+      so the pattern integer is the only variable). Pick a track you genuinely do not care about.
+      **Record the verdict** in `rekordbox-lightingdb-schema/SKILL.md` (the "VERDICT PENDING" section
+      is already stubbed and dated), then **delete `src/rbxlight/experiments/`** and its tests — the
+      module is disposable by contract and its only job is answering this one question.
+      Do this only if the bank takeover proves insufficient; otherwise close the question as
+      not-worth-the-risk and delete the module anyway.
 
 **Dependencies:**
 - `FUTURE-fullarcai-venue` depends on `RIG-calibration-session`, specifically the item confirming which physical moving head sits on which truss segment. Designing a new fixture-to-slot assignment on an unverified physical mapping risks designing the wrong show.
