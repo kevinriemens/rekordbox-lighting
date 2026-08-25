@@ -145,9 +145,7 @@ Reopen rekordbox and your changes are there.
 Run `rbxlight` with no arguments — or `rbxlight tui` explicitly — and you get a menu instead of
 having to remember commands:
 
-```
-Macros · Preview · Layout · Venues · Sync · Backups · Exit
-```
+![TUI preview](docs/tui.png)
 
 Every existing command still works exactly as before, including `rbxlight --help`.
 
