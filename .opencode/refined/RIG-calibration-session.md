@@ -19,7 +19,11 @@ claimed_by_date:
 
 ## 2. Business Context & Value
 
-Five backlog items were all blocked on "needs the physical lights wired". The setup cost — rig powered, DMX patched, rekordbox open, a known track cued — is identical for one item as for all five. Batching them means paying that cost once. Three of the five are answered by simply looking at the rig. This story exists so the user never has to re-derive what to look at.
+This session is **the gate that unblocks the TRACKLIGHT epic** (see `.opencode/refined/TRACKLIGHT-epic.md`). It now carries the single most valuable unknown in the project: whether `phrase_data` rows shadow on playback (E2) and whether per-phrase macro overrides can be written externally (E3).
+
+Seven items were all blocked on "needs the physical lights wired": five original calibration items, plus two new experiments (E2 and E3) that require physical rig access. The setup cost — rig powered, DMX patched, rekordbox open or closed as needed, a known track cued — is identical whether you run one item or all seven. Batching them means paying that cost once.
+
+**Cost:** This session is expensive. It requires physical presence at the rig, with rekordbox running and DMX output live for observation, and carefully sequenced DB access (rekordbox open for some steps, closed for others) to avoid corruption. Everything that needs the rig is batched here so the rig trip never repeats.
 
 The visualizer carries an honest disclaimer: it "renders this tool's interpretation of the macro format, not rekordbox's actual playback engine. Movement patterns are approximations." This session is the one chance to find out how far off it is, and to raise or lower confidence in every macro generated so far.
 
@@ -30,19 +34,27 @@ Before starting, verify:
 - [ ] Rig powered and DMX patched; all fixtures responding
 - [ ] rekordbox open, active venue confirmed as id 2 (`rbxlight venue list`)
 - [ ] A known track cued that reliably lands on a COOL/HIGH phrase (e.g., one that triggers macro_id 31 `HIGH CHORUS1 COOL`)
+- [ ] A throwaway track already lighting-analysed (for E2 and E3): record its `content.id`, `song_id`, current `macro_pattern_id`, and full `phrase_data` rows verbatim for revert
 - [ ] Phone or notepad ready — the whole point is recording answers
-- [ ] **Critical**: rekordbox must be RUNNING for observation, but must be QUIT before any `--write` command. Plan to observe everything first, then quit rekordbox, then apply all changes together.
+- [ ] **Critical**: rekordbox must be RUNNING for observation, but must be QUIT before any `--write` command. The session is sequenced so observation and writes do not overlap. See "Session Logistics" below.
 
 ## 4. Acceptance Criteria
+
+The session is complete when **every item listed below has a recorded, unambiguous verdict**, and every original item in the story has its answer. A verdict of "no effect" is a complete result, not a failure — precedent: the ninth-bank probe returned a documented NO and that counted as a success.
 
 * [ ] **Item 1 — Visualizer verdict recorded**: For each of the four behaviours (movement shape, colour timing, gobo, tempo), a written verdict is recorded: "matches", "close enough to judge macros by", or "misleading"
 * [ ] **Item 2 — Bar sweep direction verified**: Recorded which bars have `tilt_reversal` set and whether that matches physical reality; stale backlog claim corrected
 * [ ] **Item 3 — LM70S sweep degrees confirmed**: Actual pan/tilt throw degrees measured and recorded; layout file updated if needed; constants updated if all four heads agree with each other but disagree with defaults
 * [ ] **Item 4 — Head-to-segment assignment corrected**: Each of the four LM70S heads is lit individually, physical position recorded, and layout file updated via `layout install` (dry run first, then `--write`)
 * [ ] **Item 5 — Panel vocabulary captured**: Verbatim wording from rekordbox UI recorded for bank selector, energy selector, energy values, and phrase/phase terminology
+* [ ] **E2a — Playback shadow test**: Bank repoint observation recorded — does the lighting differ from before, or does playback ignore the repoint?
+* [ ] **E2b — UI shadow test**: Rekordbox's mood/bank selector displays the new or old bank value on the changed track?
+* [ ] **E2c — Re-analysis shadow test**: After repointing the bank, run rekordbox analysis on the same track. Afterwards, do the `phrase_data` rows rebuild to point at the new bank's macros, or remain shadowed?
+* [ ] **E3 — Direct phrase-write test**: Write `macro_id` for a single phrase to an unmistakable, unrelated macro. At playback, does the override fire at the right moment and with the correct macro?
+* [ ] **Findings written and linked**: `docs/experiments/E2-E3-shadow-and-phrase-write.md` created with verdicts and cross-linked from `.opencode/refined/TRACKLIGHT-epic.md` and `docs/PROJECT-FOUNDATION.md` open-questions list
 * [ ] **No live database written while rekordbox was running**: All `--write` commands executed only after rekordbox quit
 * [ ] **Dry run before every write**: Every `--write` command preceded by the same command without `--write`
-* [ ] **Five rig items removed from backlog**: `.opencode/BACKLOG.md` updated to remove items from "Blocked on the rig" section
+* [ ] **All rig items removed from backlog**: `.opencode/BACKLOG.md` updated to remove all items from "Blocked on the rig" section
 * [ ] **Skills updated with confirmed facts**: `physical-rig-profile` and `rekordbox-lightingdb-schema` updated with head-to-segment assignment, real pan/tilt degrees, and panel vocabulary
 
 ## 5. Technical Constraints
@@ -230,6 +242,85 @@ Research verified: `DEFAULT_TILT_BLOCK_ROTATION_DEGREES = 90.0` is a rendering-o
 
 ---
 
+### ITEM E2: The shadow test — does bank repoint reach playback?
+
+**The question**: When we change which bank a track is assigned to (via `content.macro_pattern_id`), does playback actually change, or does the `phrase_data` layer shadow the change?
+
+**Why it is uncertain**: There are two layers in the playback path. `user.db3 content.macro_pattern_id` says which bank a track belongs to. `user.db3 phrase_data` holds one row per analysed phrase of that track (`content_id`, `phrase_num`, `macro_id`, `initial_macro_id`) — **and this is the layer that fires during playback**. `phrase_data` appears to be populated at analysis time by copying from the bank's `macro_assign` rows. If it is a genuine snapshot, then repointing the bank afterwards changes nothing for an already-analysed track — the phrase rows still name the old macros. Measured evidence supporting a real copy rather than a live lookup: of 41742 `phrase_data` rows, only 36 have `macro_id <> initial_macro_id`, and zero are NULL — every row carries a concrete macro id, which is what a snapshot looks like, not a pointer.
+
+**Why it blocks everything**: If `phrase_data` shadows, then Stage 1 (assigning banks from track metadata) only affects tracks analysed *after* the change, and both Stage 1 and Stage 2 become 41742-row rewrites instead of a ~7500-row write and a single-row write. The entire shape of two stages depends on this answer. Nothing downstream should be built until it is known.
+
+**Preparation, before going to the rig** (rekordbox must be closed for this part):
+
+1. Choose one throwaway track that is already lighting-analysed, that the DJ does not care about, and that has clear structure (an obvious intro and an obvious drop) so a lighting change is easy to see. Record its `content.id`, its `song_id`, its current `macro_pattern_id`, and its full set of `phrase_data` rows verbatim, so exact revert is possible.
+2. Pick a target bank that looks *maximally different* from the current one, not subtly different. If the track is currently on COOL, move it to HOT or VIVID at the same energy. The observation is easier the more violent the contrast.
+3. Write the change with a minimal script in the disposable `src/rbxlight/experiments/` package — NOT via production CLI, which does not yet have a bank command. `phrases/repo.py` already has `update_content_macro_pattern_id(conn, content_id, macro_pattern_id)`; use it with full safety flow: guard rekordbox-not-running, `backup_all()`, single transaction, verify by re-read.
+4. Record what the lighting looked like BEFORE, on the same track, on video if possible. Memory is not evidence.
+
+**At the rig, three sub-observations — record each separately, they can disagree and a disagreement is itself a finding**:
+
+- [ ] **E2a — Playback**: Play the track. Does the lighting differ from the before-recording? This is the actual question.
+  - Observation: ☐ lighting changed | ☐ lighting unchanged | ☐ unclear
+  - Notes: ___________________________________________________________
+
+- [ ] **E2b — The UI**: Does rekordbox's own mood/bank selector display the new bank for this track, or the old one? The UI reading the new value while playback ignores it (or vice versa) would tell us exactly which layer rekordbox trusts for what.
+  - Observation: ☐ UI shows new bank | ☐ UI shows old bank | ☐ unclear
+  - Notes: ___________________________________________________________
+
+- [ ] **E2c — Re-analysis**: With the bank still repointed, run rekordbox's lighting analysis on this track again. Afterwards, re-read `phrase_data` for it. Did the rows get rebuilt to point at the NEW bank's macros?
+  - Observation: ☐ phrase_data rebuilt from new bank | ☐ phrase_data unchanged | ☐ unclear
+  - Notes: ___________________________________________________________
+
+**Possible verdicts and what each means** (choose one):
+
+- ☐ **Bank repoint reaches playback directly** — best case. Stage 1 writes ~7500 `content` rows and is done.
+- ☐ **Shadowed, but re-analysis rebuilds `phrase_data` from the new bank (E2c positive)** — workable. Stage 1 writes the bank, then the DJ re-analyses. Slower, but no `phrase_data` writing needed.
+- ☐ **Shadowed, and re-analysis does not rebuild** — Stage 1 must write `phrase_data` directly, 41742 rows, and the design changes substantially. Also means Stage 3 arrives earlier than planned, because per-phrase writing becomes mandatory rather than aspirational.
+
+**Revert**: Restore the recorded `macro_pattern_id` and, if E2c ran, the recorded `phrase_data` rows exactly.
+
+---
+
+### ITEM E3: The direct phrase-write test — can external phrase overrides fire?
+
+**The question**: Can we write `phrase_data.macro_id` directly for a single phrase and make that macro actually fire at that point in the track?
+
+**Why it matters**: This is the entire technical premise of Stage 3 — per-track light shows. If a phrase row can be pointed at any macro and it plays, then a bespoke show per track is a matter of authoring content and choosing macros per phrase. If it cannot, Stage 3 needs a completely different approach and should be reconsidered from scratch.
+
+**Encouraging prior evidence, not proof**: 36 of the 41742 phrase rows already differ from their `initial_macro_id`, which means *something* has written per-phrase overrides in this library before — most likely the DJ, via rekordbox's own UI. That establishes the field is writable and meaningful, but not that an externally-written value is honoured.
+
+**Method**:
+
+1. Use the same throwaway track from E2.
+2. Pick one phrase in an obvious, easily-recognised position — the drop is ideal.
+3. Point that single phrase's `macro_id` at a macro that is unmistakable and unrelated to anything the bank would normally play there.
+4. Leave every other phrase untouched, so the contrast is local and obvious. Preserve `initial_macro_id` — untouched, exactly as the LightingDB's own revert convention intends.
+5. Write the change with the same experimental script package, with full safety: guard rekordbox-not-running, `backup_all()`, single transaction, verify by re-read.
+
+**At the rig, record**:
+
+- [ ] **Override fire observation**: Play the track and watch that one moment. Does the override fire? Does it fire at the right moment? Does the surrounding lighting continue normally either side of it?
+  - Observation: ☐ override fires at right moment | ☐ override fires at wrong moment | ☐ override does not fire | ☐ unclear
+  - Notes: ___________________________________________________________
+
+**Revert**: Restore `macro_id` from the recorded original (which equals `initial_macro_id` for an untouched row).
+
+---
+
+### Session Logistics — sequencing rekordbox open/close
+
+The session requires rekordbox to be open for observation and closed for DB writes. Budget accordingly:
+
+1. **Before travelling**: All DB preparation, with rekordbox closed. Backups taken. Before-state recorded for E2 and E3.
+2. **At the rig, rekordbox open** (first): E2a, E2b, Item 1, and any existing observation-only items from Items 2–5. Record all verdicts.
+3. **E2c requires analysis**: Run rekordbox's lighting analysis on the throwaway track (rekordbox open). Afterwards, close rekordbox to re-read `phrase_data` from the closed DB without interference.
+4. **E3 requires write, then observe**: Close rekordbox. Execute the phrase-write script. Reopen rekordbox and play the track to observe E3. Close rekordbox again for revert.
+5. **Reverts at the end**, rekordbox closed: Restore all throw-away state.
+
+This sequencing avoids writing to a live DB (which corrupts) and minimizes quit/relaunch cycles.
+
+---
+
 ## 7. Post-Session: Apply Changes and Update Documentation
 
 **CRITICAL**: All changes below happen AFTER rekordbox is quit. Never write to a live DB with rekordbox running.
@@ -266,27 +357,34 @@ rbxlight layout regenerate --venue 2
 rbxlight layout regenerate --venue 2 --write
 ```
 
-### Step 4: Update `.opencode/BACKLOG.md`
+### Step 4: Write up E2 and E3 findings
 
-- Remove the five rig items from the "Blocked on the rig" section
+Write findings to `docs/experiments/E2-E3-shadow-and-phrase-write.md`, starting with the verdict (not buried in notes), cross-linked from:
+- `.opencode/refined/TRACKLIGHT-epic.md`
+- `docs/PROJECT-FOUNDATION.md` open-questions list
+
+### Step 5: Update `.opencode/BACKLOG.md`
+
+- Remove all rig items (Items 1–5, E2, E3) from the "Blocked on the rig" section
 - Correct the stale bar-sweep-direction claim (Item 2): explain that the mirroring comes from `tilt_reversal`, not from the constant
 - Record the outcomes from Items 1, 3, 4, 5
+- Note that E2 and E3 verdicts are in `docs/experiments/E2-E3-shadow-and-phrase-write.md`
 
-### Step 5: Update `.opencode/skills/physical-rig-profile/SKILL.md`
+### Step 6: Update `.opencode/skills/physical-rig-profile/SKILL.md`
 
 Record confirmed facts:
 - Head-to-segment assignment (Item 4)
 - Real pan/tilt degrees (Item 3)
 - Panel vocabulary (Item 5)
 
-### Step 6: Update `.opencode/skills/rekordbox-lightingdb-schema/SKILL.md`
+### Step 7: Update `.opencode/skills/rekordbox-lightingdb-schema/SKILL.md`
 
 Record the confirmed panel vocabulary mapping (Item 5):
 - What rekordbox calls the bank selector and what it controls
 - What rekordbox calls the energy selector and what it controls
 - Confirmed terminology for phrase/phase
 
-### Step 7: Verify by re-read
+### Step 8: Verify by re-read
 
 After writing, verify the changes persisted:
 
@@ -296,9 +394,12 @@ cat work/layouts/layout_venue_2.json | jq '.entries[] | {fixture_id, label, x, y
 
 # Verify backlog was updated
 grep -A 20 "Blocked on the rig" .opencode/BACKLOG.md
+
+# Verify experiments file was created
+cat docs/experiments/E2-E3-shadow-and-phrase-write.md
 ```
 
-### Step 8: Report the restore command
+### Step 9: Report the restore command
 
 If anything goes wrong, restore from backup:
 
@@ -321,27 +422,37 @@ N/A — this is an observational session, not a feature build.
 **What existing behavior is affected**:
 - The layout file (`work/layouts/layout_venue_2.json`) is the single source of truth for physical fixture positions and sweep ranges. Corrections here affect all subsequent previews and macro generation.
 - The visualizer's rendering confidence is retroactively raised or lowered based on Item 1's verdict. If the preview is misleading on any behaviour, all macros generated so far are suspect.
-- The backlog's "Blocked on the rig" section is cleared, unblocking the bank-takeover story (Item 5 feeds it).
+- The backlog's "Blocked on the rig" section is cleared, unblocking the bank-takeover story (Item 5 feeds it) and the TRACKLIGHT epic (E2 and E3 feed it).
+- E2's verdict determines whether Stage 1 and Stage 2 can be simple rewrites of ~7500 and 1 row, or whether they must rewrite 41742 `phrase_data` rows.
+- E3's verdict determines whether Stage 3 (per-track light shows) is technically feasible via direct phrase writes, or requires a different approach.
 
 **Domain rules**:
 - DMX addresses are never changed by this story — only physical positions and sweep ranges.
 - `tilt_reversal` is the source of bar mirroring, not the mounting-rotation constant.
 - Layout regeneration preserves per-fixture calibration via `apply_prior_calibration`.
 - Rekordbox must be quit before any `--write` command.
+- `phrase_data.macro_id` and `phrase_data.initial_macro_id` are distinct fields: `initial_macro_id` is the original at analysis time; `macro_id` is the current playback-used value (may be overridden by the user or by external write).
+- All E2 and E3 changes use the experimental `src/rbxlight/experiments/` package, not production CLI, to avoid corrupting the library with half-baked code.
 
 **Known pitfalls**:
 - Confusing the mounting-rotation constant with the `tilt_reversal` flag (Item 2).
 - Forgetting to dry-run before `--write`.
-- Writing to the database while rekordbox is running.
+- Writing to the database while rekordbox is running (corrupts the DB).
 - Inventing fixture positions instead of measuring them (Item 4).
+- Forgetting to record before-state verbatim for E2 and E3 reverts.
+- Running E2's bank repoint while rekordbox is running (must be closed for writes).
 
 ---
 
 ## 10. Test Impact Analysis
 
-N/A — this is an observational session, not a code change. No existing tests are modified.
+N/A for Items 1–5 — these are observational, not code changes.
+
+E2 and E3 are experiments that use temporary write scripts in `src/rbxlight/experiments/` to test hypotheses. These scripts are *not* added to the test suite or shipped with the product. No existing tests are modified by this session.
 
 However, the existing test `test_should_never_give_the_two_tilt_blocks_opposing_mounting_rotations` (in the test suite) guards against the double-mirroring bug described in Item 2. This test should continue to pass after the session.
+
+If E2c and E3 verify positively, *future* stories that implement Stage 1, Stage 2, and Stage 3 will add tests that assert the new behaviour (bank repoints and per-phrase writes). Those stories are not this one.
 
 ---
 
