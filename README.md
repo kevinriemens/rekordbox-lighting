@@ -198,6 +198,48 @@ supported way to script or automate this tool.
 
 ---
 
+## Roadmap & milestones
+
+This tool is under active development. Right now it can read and write rekordbox's lighting databases safely, author macros from YAML, and preview them offline. What it cannot yet do is decide which lighting a track should get — that is the work of the milestones below.
+
+### Where we are now
+
+The tool reads and writes `macro.db3` and `user.db3` under strict safety rules (backups, dry-runs, no writes while rekordbox is running). You can author macros by hand as YAML, generate them with code or an LLM, and preview them in the browser without touching a single light. But today, every track still uses one of rekordbox's eight stock lighting banks, assigned at analysis time by an undocumented mechanism.
+
+### Milestone 1 — Prove the writes reach the lights
+
+A physical rig session to confirm that changing a track's lighting bank from outside rekordbox actually reaches playback, and that lighting data reconstructed by this tool is accepted by rekordbox. Everything else gates on this: until it's proven, any bulk-assignment feature might write rows that rekordbox silently ignores or shadows with its own internal state.
+
+### Milestone 2 — Identify tracks reliably
+
+Bridge rekordbox's main library to its lighting database so a track's genre, BPM, and My Tags can be read. About 60% of existing lighting rows reference track IDs that no longer resolve, so this work also involves recovering identity by fingerprinting a track's analysed phrase structure. See `docs/experiments/` for what has been proven and how.
+
+### Milestone 3 — Assign banks automatically
+
+Hand-authored YAML rules map a track's genre and tags to one of rekordbox's eight lighting banks and three energy levels, replacing the near-uniform default. Includes a dry-run plan, a safe apply, and a revert that remembers what each track was before.
+
+### Milestone 4 — Author better macros
+
+Reusable YAML macro recipes keyed by fixture *role* rather than by a specific slot number — so a lighting look can be written once and applied to different rigs. This is the milestone least dependent on the maintainer's own hardware, and where outside contributors can make the biggest impact.
+
+### Milestone 5 — Replace the stock banks
+
+Point rekordbox's built-in lighting banks at custom macros, keeping the factory values intact so it's always reversible. This is how the eight presets become diverse rather than overwhelming — replacing what they play, not fighting the mechanism that chooses them.
+
+### Milestone 6 — A light show per track
+
+The long-term goal: bespoke per-track lighting rather than one of eight presets. Still exploratory and dependent on the earlier milestones landing, and waiting on proof that rekordbox accepts externally-written per-track overrides.
+
+### Where help is genuinely useful
+
+This is reverse-engineering of an undocumented subsystem. Every finding so far comes from one person's library on one machine, so the single most valuable contribution is someone running the read-only probes in `docs/experiments/` against a *different* library and reporting whether the findings hold — or where they break. Libraries with different tagging habits, different rekordbox versions (especially 7), different import and migration histories, and different hardware setups all make the recovery more robust.
+
+The probes are read-only and never write to a rekordbox database. The project's safety rules are documented in `.opencode/skills/rekordbox-data-safety/SKILL.md` and enforced throughout the codebase.
+
+If you want the full picture of why milestones are ordered this way and what unblocks when each one lands, see `.opencode/refined/TRACKLIGHT-EXECUTION-ORDER.md`. The epic itself lives in `.opencode/refined/TRACKLIGHT-epic.md`.
+
+---
+
 ## Finding things
 
 **List your own macros:**
