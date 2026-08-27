@@ -18,6 +18,14 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.10",
 ]
+# Not a runtime dependency of rbxlight — only for the E1 probe under
+# src/rbxlight/experiments/e1_library_join.py, which reads the SQLCipher-
+# encrypted rekordbox main library (master.db). See
+# docs/experiments/E1-library-join.md and the rekordbox-data-safety skill.
+experiments = [
+    "pyrekordbox>=0.4",
+    "sqlcipher3-wheels>=0.5",
+]
 
 [project.scripts]
 rbxlight = "rbxlight.cli:app"
