@@ -88,11 +88,34 @@ Connection pieces join adjacent segments. Overall bounding box: approximately **
 - **Pars stand on the ground outside the arch footprint**, two to the left of the left leg, two to the right of the right leg. (Only 3 of these 4 physical pars are patched — see the ownership note above.)
 - **A smoke machine sits on the ground.** It has **no DMX presence** in the venue fixture list — it must never be invented as a fixture, macro target, or slot in generated venues.
 
-## CRITICAL: the bars do not form one horizontal sweep surface
+## CRITICAL: the 18 bar cells alone do not form one horizontal sweep surface
 
-Because both L1015 bars are mounted **vertically** on the left and right legs, "a left-to-right sweep across the arc" is **not** what the bar cells physically do. Each bar's 9 cells produce **vertical rises and falls on its own side of the arch** — bar 1's cells move up/down the left leg, bar 2's cells move up/down the right leg. There is no shared horizontal axis between them.
+Because both L1015 bars are mounted **vertically** on the left and right legs, "a left-to-right sweep built from the 18 bar cells sharing one horizontal axis" is **not** what the bar cells physically do. Each bar's 9 cells produce **vertical rises and falls on its own side of the arch** — bar 1's cells move up/down the left leg, bar 2's cells move up/down the right leg. There is no shared horizontal axis between the two bars' cells.
 
-Any macro design or slot-allocation reasoning that assumed the 18 cells form one continuous horizontal surface is **wrong**, and this directly affects the planned `FullArcAI` venue: its earlier justification (freeing slots to enable "a continuous left-to-right sweep across all 18 cells") no longer holds, because the physical geometry doesn't support that motion in the first place. That rationale must be revisited before `FullArcAI` is built — the slot-budget arithmetic below is still correct math, but its stated *goal* needs to change to something the physical rig can actually produce (e.g. synchronized or offset vertical rises on both legs, rather than a horizontal sweep).
+Any macro design or slot-allocation reasoning that assumed the 18 cells alone form one continuous horizontal surface is **wrong**, and this directly affected the planned `FullArcAI` venue: its earlier justification (freeing slots to enable "a continuous left-to-right sweep across all 18 cells") does not hold in that specific cells-only framing. That narrow rationale needed revisiting — the slot-budget arithmetic below is still correct math, but its stated *goal* needed to change to something the physical rig can actually produce from cell motion alone (e.g. synchronized or offset vertical rises on both legs).
+
+**This does not mean a left-to-right sweep is impossible for the rig as a whole** — see "Named rig gesture: the perimeter sweep" below. A whole-rig sweep exists; it just isn't built from the 18 cells' horizontal motion, because the cells have none.
+
+## Named rig gesture: the perimeter sweep ("left-to-right")
+
+The DJ has a specific gesture in mind that he calls the "left-to-right sweep": a light travelling around the rig's outer perimeter, described in his own words as "the light following the rig from down left, going straight up through the bar lights, then going to the 45 degrees moving head, then the two horizontal moving heads, then 45 degrees down moving head and doing the right side bar."
+
+Mapped onto the documented fixtures, in order:
+
+```
+1. bottom of the left 150cm leg     -> bar 1's cells, lowest cell first
+2. up the left leg                  -> bar 1's cells, rising (vertical, per-leg motion)
+3. left 45° diagonal                -> the LM70S head mounted on that segment
+4. horizontal top                   -> the two LM70S heads spaced along that segment
+5. right 45° diagonal                -> the LM70S head mounted on that segment
+6. down the right leg                -> bar 2's cells, descending (vertical, per-leg motion)
+```
+
+This is a **real, buildable gesture**, not a horizontal pan across the room and not a claim that the 18 cells share a horizontal axis. It reads as "left-to-right" at the scale of the whole rig — a path traversing the arch from one side to the other — while every individual fixture along that path only ever does what it can physically do: the two bars move vertically on their own leg, and each LM70S moving head takes over at its own fixed position. The "sweep" is the handoff sequence between fixtures, not a single fixture moving horizontally.
+
+**The general trap this corrects:** a gesture's *name* can describe its overall visual reading (here, "left-to-right") while its *implementation* is per-fixture motion in a different axis entirely (here, vertical rises on two separate legs, chained with fixed-position moving-head handoffs). Do not infer, from a gesture's name, what axis or fixture is doing the moving — check the fixture-by-fixture path. Read a name as an intent description, not a specification of any single fixture's motion. This is exactly the mistake made previously in this file: a gesture named for its horizontal reading was judged impossible because its *components* move vertically, when in fact both are true at once — vertical per-leg motion IS the mechanism the horizontal-reading gesture is built from, not a contradiction of it.
+
+This gesture is the motivating example for breaking the bar mirror (the planned `FullArcAI` venue, see slot budget below): it requires bar 1 and bar 2 to run independent, non-mirrored vertical motion at different points in the phrase (bar 1 rising while the path is on the left, bar 2 descending once the path reaches the right), which the current hard-mirrored cell-to-slot assignment cannot express.
 
 ## Layout lives on disk, not in rekordbox
 

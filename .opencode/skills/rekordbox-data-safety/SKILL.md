@@ -1,6 +1,6 @@
 ---
 name: rekordbox-data-safety
-description: MANDATORY safety rules for reading/writing Pioneer rekordbox LightingDB files. Load BEFORE any code that opens, reads, or writes macro.db3, user.db3, or master.db3. Covers backups, process guards, dry-run, and rollback.
+description: MANDATORY safety rules for reading/writing Pioneer rekordbox LightingDB files, and for the narrow, read-only exceptions covering rekordbox's main library (master.db) and a track's own ANLZ analysis files. Load BEFORE any code that opens, reads, or writes macro.db3, user.db3, master.db3, master.db, or an ANLZ .EXT file. Covers backups, process guards, dry-run, rollback, the master.db/ANLZ read-only rules, and the before-a-differential-pull snapshot discipline.
 metadata:
   skill-type: safety
   language: python
@@ -284,6 +284,48 @@ These are genuinely unverified — do not write code that depends on any of them
 - Whether rekordbox silently rewrites user macros on its own version upgrades, and whether that would step on macros this tool created.
 
 Because these are unknown, a full round-trip test — write with this tool, then open in rekordbox, then re-export/re-read — is required before trusting any new write path in practice, no matter how confident the code looks.
+
+## `master.db` — the main rekordbox library (added 2026-08-25)
+
+**Do not confuse this with `master.db3`.** They are different files, different formats, different locations, covered by different rules:
+
+| | `master.db3` | `master.db` |
+|---|---|---|
+| Location | `~/Library/Application Support/Pioneer/rekordbox6/LightingDB/` | `~/Library/Pioneer/rekordbox/` |
+| Format | plain SQLite3 | **SQLCipher-encrypted** SQLite3 |
+| Content | factory fixture-profile library for LightingDB | rekordbox's main track library (`DjmdContent`, artists, genres, colours, My Tags, ...) |
+| Size | ~512MB | tens of MB, grows with the library |
+| Rule | never copied wholesale (rule 4 above) — read live, metadata-only backup | see below |
+
+`master.db` was opened for the first time for E1 ("the library join" — see `docs/experiments/E1-library-join.md`), which needed real track metadata (genre, colour, My Tag, comment, rating, BPM, key) to test whether it's viable to drive a per-track lighting heuristic. Prior to E1, this project had no legitimate reason to touch `~/Library/Pioneer/` at all, and the rest of this skill still forbids it **except** under the narrow terms below.
+
+**Non-negotiable rules for `master.db`:**
+
+1. **READ-ONLY, FOREVER, NO EXCEPTIONS.** It holds a working DJ's entire main library. There is no legitimate write path to this file in this tool, now or later — this is stricter than `master.db3`, which at least has a "never write" rule stated for symmetry with 4/5; `master.db` doesn't even get that symmetry because nothing in this tool has any business writing rekordbox's main library.
+2. **Never open the original read-write, not even transiently.** Guard rekordbox-not-running first (`safety.guard_rekordbox_not_running()` — the same guard used for every other write in this project), then `shutil.copy2` it to `work/master.db` and read ONLY the copy from then on. `work/master.db` is gitignored (covered by the existing `work/` entry).
+3. **If pyrekordbox needs sibling files to locate the key or config, read those read-only too.** Never write into `~/Library/Pioneer/` under any circumstance.
+4. **The decryption key:** on rekordbox versions before the ~6.6.5 key rotation, pyrekordbox ships a static, already-published key it applies automatically (`pyrekordbox.utils.deobfuscate` + a constant blob) — no network call. If that static key is stale for the installed rekordbox version, pyrekordbox provides `python -m pyrekordbox download-key`, which needs network ONCE and caches the result; this project is otherwise strictly offline, and that command is the *only* sanctioned exception. If the static key fails AND `download-key` also fails (or the situation looks like it needs a human decision), **stop and report — never improvise a key source.**
+5. **pyrekordbox is an optional dependency, not a runtime one.** It lives in the `experiments` extra in `pyproject.toml` (`pip install -e ".[experiments]"`), not in `rbxlight`'s hard dependencies — this tool's normal operation never needs to decrypt anything.
+
+E1's probe script (`src/rbxlight/experiments/e1_library_join.py`) is the reference implementation of all five rules above.
+
+## ANLZ analysis files — read-only, same posture as `master.db` (added 2026-08-26)
+
+A track's own phrase-analysis cache (the `.EXT` file under rekordbox's ANLZ storage, located via
+`DjmdContent.AnalysisDataPath` in `master.db`) is a third read-only data source, on the same footing
+as `master.db` itself: **never write to it.** Unlike `master.db`, it's small and per-track, so there is
+no wholesale-copy step to worry about — read it directly (via `pyrekordbox`'s `AnlzFile.parse_file`),
+the same way `master.db`'s copy is read once resolved. See the `rekordbox-lightingdb-schema` skill for
+what it contains (`PSSI` phrase-kind data) and what it's used for.
+
+## Snapshot before a differential `pull` (added 2026-08-26)
+
+If a probe or feature needs to measure *what changed* across a `pull` — a genuine before/after diff of
+the working copy — copy `work/user.db3` (and `work/macro.db3` if relevant) to a separate, explicitly
+named snapshot file **before** running `pull`. A normal `pull` overwrites the working copy in place;
+without a snapshot taken first, the prior state is gone and there is nothing left to diff against. The
+E1d/E1d2 probes relied on exactly this (`work/e1d_before_user.db3`, `work/e1d2_before_user.db3`) to
+measure a DJ session's effect on the LightingDB.
 
 ## References
 

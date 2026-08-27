@@ -1,6 +1,6 @@
 ---
 name: rekordbox-lightingdb-schema
-description: Schema of rekordbox 6 LightingDB (macro.db3, user.db3) and the LightingEditModel XML macro format. Use when reading, generating, or transforming macros, venues, fixtures, or phrase assignments.
+description: Schema of rekordbox 6 LightingDB (macro.db3, user.db3), the LightingEditModel XML macro format, and how content/phrase_data relate to rekordbox's main library and a track's own ANLZ analysis (track identity, phrase-to-phase mapping, row-creation semantics, PSSI). Use when reading, generating, or transforming macros, venues, fixtures, phrase assignments, or anything joining to a track's identity/analysis data.
 metadata:
   skill-type: domain-reference
   language: python
@@ -313,6 +313,22 @@ CREATE TABLE lighting_property (
 ### How macros get selected for a track
 
 1. `content.macro_pattern_id` selects one of the 27 rows in `macro_pattern` for that track. `macro_pattern = energy(1..3) × style(1..8, 99)` — 3 × 9 = 27 rows total.
+
+   **Bank names, in `pattern` order** (E1e; never stored as a column anywhere in the schema — the only place a name appears at all is the trailing token of a factory macro name, e.g. `HIGH CHORUS1 COOL`):
+
+   | `pattern` | bank name |
+   |---|---|
+   | 1 | COOL |
+   | 2 | NATURAL |
+   | 3 | HOT |
+   | 4 | SUBTLE |
+   | 5 | WARM |
+   | 6 | VIVID |
+   | 7 | CLUB1 |
+   | 8 | CLUB2 |
+   | 99 | INTERLUDE — not user-selectable, see the ninth-bank section below |
+
+   **Identity is `(energy, pattern)`, not `macro_pattern.id` alone** — `id` is just a surrogate key over that pair; don't hardcode an `id ↔ bank name` mapping without also checking `energy`/`pattern` on the row.
 2. `macro_assign(macro_pattern_id, phase, macro_id, initial_macro_id)` maps `(pattern, phase)` → a concrete `macro_id`. **The number of phases is NOT uniform, and it is NOT derivable from `energy` alone.** Measured live total: **232 rows**, not 27 × 11.
 
    Measured per-row phase counts (`macro_pattern.id` → count):
@@ -330,7 +346,208 @@ CREATE TABLE lighting_property (
    *(Corrected 2026-08-23: this section previously documented a uniform `1..11`. **Corrected again 2026-08-25** — the 2026-08-23 fix replaced one formula with another, claiming energy alone determines the count, i.e. "11 phases for energy 1". That is wrong for patterns 7 and 8, which have 10 at HIGH. Re-verified 2026-08-25 by direct query. The lesson the two corrections share: this column has no rule, only data.)*
 3. `phrase_data(content_id, phrase_num, macro_id, initial_macro_id)` is the **per-track override** layer, keyed by `(content_id, phrase_num)`. `phrase_num` observed range is `1..99`. This is what actually fires during playback for a given phrase of a given track — it starts as a copy of the pattern/phase assignment but can be hand-edited per track.
 
-   ⚠️ **`phrase_data` is user work and must never be clobbered.** Because it is the layer that actually fires, it also *shadows* `macro_assign`: changing a bank's assignment does not necessarily change what an already-analyzed track plays. Any feature that rewrites `macro_assign` must treat existing `phrase_data` rows as authoritative and leave them alone, and must be honest that its effect on already-analyzed tracks is not guaranteed. Whether rekordbox ever re-copies `macro_assign` into `phrase_data` (on re-analysis? on a UI action?) is **not yet established** — determine it empirically before promising a behaviour.
+   ⚠️ **`phrase_data` is user work and must never be clobbered.** Because it is the layer that actually fires, it also *shadows* `macro_assign`: changing a bank's assignment does not necessarily change what an already-analyzed track plays. Any feature that rewrites `macro_assign` must treat existing `phrase_data` rows as authoritative and leave them alone, and must be honest that its effect on already-analyzed tracks is not guaranteed.
+
+   **Update (E1d/E1d2, 2026-08-26) — partially resolved.** Changing a track's bank through rekordbox's own LIGHTING mode editor DOES rewrite that track's `phrase_data` wholesale from the new bank's `macro_assign` — verified twice, on two different tracks, 100% value-level match both times. See "A bank change in the rekordbox UI rewrites `phrase_data`" below for the mechanism and what's still an open question (an external write to `content.macro_pattern_id` alone, bypassing the UI, has NOT been shown to have the same effect — treat that as unproven, not as confirmed).
+
+## Track identity: `content.song_id` vs `DjmdContent.ID` (master.db)
+
+This section, and everything under it down to "Analysis Lock", consolidates the E-series probes
+(`docs/experiments/E1*.md`) — the durable findings live here; the reports hold the raw measurements,
+denominators, and methodology for anyone who wants to verify a number.
+
+`content.song_id` **is** `DjmdContent.ID`, by design, not coincidence — proven via
+`content.master_db_id` (a constant, `127286662`, on every row) matching both `djmdProperty.DBID` and
+`djmdContent.MasterDBID` in `master.db` (see the `rekordbox-data-safety` skill for `master.db`'s
+read-only-copy rules). But as of 2026-08-26, **1,783 of 2,966 `content` rows (60.1%) carry `song_id`
+values that do not resolve to any current `DjmdContent.ID`** — split roughly evenly between
+sub-`DjmdContent`-minimum legacy IDs and in-range-but-since-removed IDs
+([E1](../../docs/experiments/E1-library-join.md)). rekordbox's own id-remap table (`uuidIDMap`) is
+empty in this library — the staleness is not programmatically recoverable by ID
+([E1](../../docs/experiments/E1-library-join.md), confirmed unchanged in
+[E1c](../../docs/experiments/E1c-after-full-analysis.md) and
+[E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)).
+
+**This measures ID resolvability, not lighting absence — do not conflate the two.**
+`song_id not in content.song_id` reads as "this track has never been lit," but
+[E1d2](../../docs/experiments/E1d2-row-creation-rerun.md) proved that reading false, directly: a track
+the DJ had just changed the bank of, live, in rekordbox's own UI, was certified "absent" by exactly
+this check, twice — because its `content` row (`id=1576`) carried the stale `song_id=5800`, while the
+track's *current* `DjmdContent.ID` is `62464681`. **Every coverage percentage this project has
+published — E1's 39.9% forward-join, E1b's 22.6%/30.4% playlist/history join, E1c's re-measurement —
+measures ID-equality resolvability, not whether a track has ever been lit.** The true
+lighting-coverage fraction is higher than any published figure, by an amount this project cannot yet
+measure.
+
+### The fingerprint bridge — recovering identity without a resolvable ID
+
+Because ID lookup cannot find a stale row, [E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)
+established a content-only alternative: a track's ANLZ `PSSI` phrase *kinds* predict its
+`phrase_data` phase sequence under a given `macro_pattern_id` (via the subkind table further down this
+section), and that predicted sequence — plus the track's own row count — narrows a same-bank
+population of 53–70 candidate `content` rows down to exactly one, for 5 of 7 tested tracks. **It found
+nothing for the other 2 of 7** — a real, reported gap, most plausibly PSSI/`phrase_data` drift (see
+"ANLZ PSSI" below) or a subkind-table gap, not resolved by that probe. Use the fingerprint bridge to
+validate or reconcile a UI-visible bank against a stale-ID row — it is not a guaranteed-always-succeeds
+recovery tool.
+
+## Row creation semantics
+
+- `content.id` allocation is dense and sequential — max observed was exactly 2,966 of 2,966 rows
+  ([E1c](../../docs/experiments/E1c-after-full-analysis.md)), later exactly 2,972 of 2,972 after 6 new
+  rows in one session ([E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)). No gap-reuse
+  observed.
+- Opening a track in rekordbox's **LIGHTING mode editor** (not merely selecting or previewing it) is
+  what creates its `content`/`phrase_data` rows. Ordinary EXPORT-mode phrase analysis does **not**
+  touch this table at all — see "Analysis pass ≠ LightingDB write" below.
+  [E1d2](../../docs/experiments/E1d2-row-creation-rerun.md) confirmed one genuinely-new row this way:
+  `content_id=2972`, bank `macro_pattern_id=7` — **COOL/MID is a freshly-lit track's default bank**,
+  not `macro_pattern_id=0` — with a full 28-row `phrase_data` set.
+- Incidental browser/preview activity (track selection, waveform hover — the exact trigger was not
+  isolated) creates **orphan stubs**: `content` rows with `macro_pattern_id=0` and **zero**
+  `phrase_data` rows.
+  [E1d2](../../docs/experiments/E1d2-row-creation-rerun.md) watched 5 appear in one session — this is
+  the explanation for the library's long-standing population of 61 `macro_pattern_id=0` orphans (see
+  the ninth-bank section below, whose text previously called their origin unexplained — it no longer
+  is).
+- On creation, `macro_id == initial_macro_id` on every `phrase_data` row — a freshly-lit track has no
+  phrase-level override yet, by definition
+  ([E1d](../../docs/experiments/E1d-lighting-mode-row-creation.md),
+  [E1e](../../docs/experiments/E1e-phrase-phase-mapping.md),
+  [E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)).
+- `content_id=2972` is **ground truth**, not back-derived: E1e's `(kind, k1, k2, k3, b) → phase` table
+  (below) predicted its full 28-phrase sequence, and rekordbox's own write matched it **28/28**
+  exactly — the first validation of that table against a row rekordbox itself wrote during the probe,
+  rather than a row that already existed.
+
+### Analysis pass ≠ LightingDB write
+
+A full-library EXPORT-mode phrase-analysis pass (running rekordbox's own "analyse track" over the
+whole collection) leaves `content` **byte-for-byte unchanged** — same row count, same join rate, same
+sampled row values, confirmed by direct diff, not aggregate comparison
+([E1c](../../docs/experiments/E1c-after-full-analysis.md)). Only actually opening a track in the
+LIGHTING mode editor creates rows (previous bullet). Do not assume "the DJ ran analysis on the library"
+grew lighting coverage — it doesn't, by itself.
+
+## ANLZ `PSSI` — part of the schema surface, reached via `master.db`
+
+A track's phrase-kind analysis lives outside `user.db3`/`macro.db3` entirely, in its own ANLZ `.EXT`
+analysis-cache file, reached via `DjmdContent.AnalysisDataPath` (in `master.db` — read-only, see the
+`rekordbox-data-safety` skill) → parse the `PSSI` tag (`pyrekordbox`'s `AnlzFile.parse_file`, scanning
+for tag type `PSSI`).
+
+Per phrase entry: `index` (1-based ordinal position — matches `phrase_data.phrase_num` directly on
+90.0% of checked tracks), `kind` (integer 1–10 observed), and four sub-flags `k1`/`k2`/`k3`/`b` that
+disambiguate cases where `kind` alone would collapse genuinely distinct phases. Struct-level (not
+per-entry) fields: `mood` (High=1/Mid=2/Low=3, documented in `pyrekordbox` itself) matches
+`macro_pattern.energy` on 1,101/1,123 checked tracks (98.0%) — **rekordbox's own energy verdict is read
+from its own phrase analysis, not guessed**; `bank` is a mostly-zero (98.9% of tracks) byte with no
+meaning established by any probe; `u1..u5` are always zero across 500 sampled tracks (confirmed unused
+padding, not signal this project missed); `len_entries` matches `phrase_data` row count on only 90.0%
+of checked tracks — the other 10% shows a track's on-disk musical analysis and its stored lighting
+programme can drift apart over time (most plausibly: re-analysed after its lighting programme was
+written). All figures: [E1e](../../docs/experiments/E1e-phrase-phase-mapping.md).
+
+**38.7% of currently-lit tracks have no readable ANLZ file at all**
+([E1e](../../docs/experiments/E1e-phrase-phase-mapping.md)) — a hard blocker for any phrase-kind-based
+derivation on those tracks, not a rare edge case to plan around.
+
+## Phrase → phase: NOT ordinal, but a stable per-bank subkind lookup
+
+**`phrase_num → phase` is refuted outright.** 0 of 120 `(macro_pattern_id, track-phrase-count)` groups
+with ≥5 tracks produced a single consistent sequence; even in the narrowest, most favourable case — a
+track's phrase count exactly equal to its bank's phase count (210 of 2,890 non-override tracks) — the
+naive identity mapping (`phrase_num == phase`) matched **0/210** tracks
+([E1e](../../docs/experiments/E1e-phrase-phase-mapping.md)). **Do not derive phase from a phrase's
+ordinal position.**
+
+**The real key is `(kind, k1, k2, k3, b) → phase`, a stable table per `macro_pattern_id`.** Validated
+against 13,197 of 41,742 existing `phrase_data` rows (1,011 tracks, spanning 19 of 27 active
+`macro_pattern_id`s): 165 of 200 distinct subkind keys (82.5%) are 100% consistent, and weighted by row
+count, 13,111/13,197 rows (99.35%) agree with their key's majority phase
+([E1e](../../docs/experiments/E1e-phrase-phase-mapping.md)). 5 rare bank combinations
+(`macro_pattern_id` 15/16/17/23/24 — HOT/SUBTLE/WARM/CLUB1/CLUB2 at LOW energy) have zero
+PSSI-readable representatives in the current population and are **not directly validated** — small
+natural samples, not evidence of a different mechanism.
+
+The forward direction — forging: `(kind, k1, k2, k3, b) → phase → macro_assign(macro_pattern_id,
+phase) → macro_id` — is always unambiguous by construction, since `macro_assign`'s primary key is
+`(macro_pattern_id, phase)`. The reverse direction (`macro_id → phase`, used only to validate existing
+rows against history) is ambiguous for 3.94% of rows, confined to exactly 4 banks (CLUB1/CLUB2 at
+HIGH/MID, `macro_pattern_id` 19–22) that legitimately duplicate a macro_id across adjacent phases —
+this is a validation-methodology artifact, not a forging blocker
+([E1e](../../docs/experiments/E1e-phrase-phase-mapping.md)).
+
+**Representative table — `macro_pattern_id=1` (COOL/HIGH, 11 phases, the highest-volume bank in the
+library, 1,159 of 2,966 `content` rows):**
+
+| kind | k1 | k2 | k3 | b | → phase | n_obs | consistency |
+|---|---|---|---|---|---|---|---|
+| 1 | 0 | 0 | 0 | 0 | 2 | 432 | 100.0% |
+| 1 | 1 | 0 | 0 | 0 | 1 | 142 | 100.0% |
+| 2 | 0 | 0 | 0 | 0 | 3 | 1,218 | 99.4% |
+| 2 | 0 | 0 | 1 | 0 | 4 | 222 | 98.6% |
+| 2 | 0 | 1 | 0 | 0 | 5 | 202 | 99.5% |
+| 2 | 0 | 1 | 0 | 1 | 5 | 309 | 99.0% |
+| 3 | 0 | 0 | 0 | 0 | 8 | 721 | 99.3% |
+| 5 | 0 | 0 | 0 | 0 | 7 | 326 | 98.8% |
+| 5 | 1 | 0 | 0 | 0 | 6 | 2,400 | 99.8% |
+| 6 | 0 | 0 | 0 | 0 | 10 | 192 | 98.4% |
+| 6 | 1 | 0 | 0 | 0 | 9 | 336 | 99.7% |
+
+(A handful of single/low-digit-`n_obs` outlier keys exist for this bank too — see the source report for
+the full, unrounded table.)
+
+**The other 18 validated banks' full subkind tables (`macro_pattern_id` 2–14, 18–22) are not
+reproduced here** — read them directly from
+[E1e — The Phrase→Phase Mapping](../../docs/experiments/E1e-phrase-phase-mapping.md#the-complete-subkind--phase-table),
+which is the intended lookup table for Stage 1/Stage 3 forging code to be built directly against, not
+merely illustrative.
+
+## A bank change in the rekordbox UI rewrites `phrase_data`
+
+Changing an already-lit track's bank through rekordbox's own LIGHTING mode editor rewrites **every one**
+of that track's `phrase_data.macro_id`/`initial_macro_id` values, drawn wholesale from the new bank's
+`macro_assign` — verified twice, on two different tracks, 100% value-level match both times
+([E1d](../../docs/experiments/E1d-lighting-mode-row-creation.md),
+[E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)). This is what the earlier "not yet
+established" note above referred to — it is now established **for a rekordbox-driven UI edit**.
+
+**Open question, not a conclusion — flagged explicitly, not upgraded to fact:** whether an *external*
+write to `content.macro_pattern_id` alone (bypassing the UI) has the same effect on `phrase_data`. It
+almost certainly will not — `phrase_data` is a separate table and no trigger mechanism has been
+observed — so **anything that writes `content.macro_pattern_id` directly must plan to rebuild
+`phrase_data` itself**, rather than assume rekordbox will do it on the next launch. This is exactly the
+question a future E2-style probe against the physical rig is meant to settle; nothing in this project's
+read-only probes can answer it.
+
+**Also open:** what happens to a track WITH a pre-existing phrase-level override when its bank
+changes — every track examined so far had `macro_id == initial_macro_id` throughout, so this is
+untested ([E1d](../../docs/experiments/E1d-lighting-mode-row-creation.md)).
+
+## No transition layer exists
+
+Phrase-to-phase is a hard cut — `phrase_data` selects one whole macro per phrase, nothing blends
+across the boundary, and there is no dedicated transition mechanism anywhere in the schema. What can
+look like a transition is tail content authored inside a macro itself:
+[E1d2](../../docs/experiments/E1d2-row-creation-rerun.md) traced one DJ-perceived "transition" to a
+macro's own brightness dips/flashes in its final third, immediately before the hard cut to the next
+phrase's macro — not a distinct mechanism. `macro_event` remains 0 rows, confirming this skill's
+existing note above that it's unused. Worth stating explicitly: the absence of a transition layer is
+otherwise easy to mistake for a gap in this project's understanding rather than a fact about rekordbox
+itself. A future stage wanting an actual crossfade between phrase macros would be building new
+functionality, not extracting one that already exists.
+
+## Analysis Lock (`master.db`)
+
+`djmdContent.Analysed` takes exactly two observed values: `105` (unlocked) and `233` (locked — a
+single bit set, `233 − 105 = 128`), set by hand in rekordbox's own UI. **36 of 7,615 tracks (0.47%)
+are locked** ([E1d2](../../docs/experiments/E1d2-row-creation-rerun.md)). Locked tracks are excluded
+from bulk re-analysis — any plan that says "re-analyse to regenerate missing ANLZ/PSSI data" must
+detect and report the tracks it cannot touch, rather than assume success. The overlap with the
+no-readable-ANLZ population (38.7% of lit tracks, above) is small: only 1 of the 36 locked tracks also
+lacks readable PSSI — the two are largely separate populations, and Analysis Lock does not explain
+most of the 38.7% gap.
 
 ### `lighting_property` known keys
 
@@ -374,6 +591,10 @@ what it does not recognise rather than repairing it. This matches the 61 `conten
 `macro_pattern_id = 0` (a pattern that has never existed), which have always survived. So when
 planning bank or venue work, the risk to test is whether rekordbox will *display* a thing — not
 whether the data will *survive*, which it does.
+
+*(Their origin was unexplained when this section was written. E1d2 later found the mechanism —
+incidental browser/preview activity creates exactly this shape of orphan row: `macro_pattern_id=0`,
+zero `phrase_data`. See "Row creation semantics" above.)*
 
 Nothing looked broken at any point, and the DB was restored to baseline afterwards (27 patterns, 232
 `macro_assign` rows, the 61 pre-existing orphans unchanged). The probe tooling was disposable and has

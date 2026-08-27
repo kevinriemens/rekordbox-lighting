@@ -10,6 +10,70 @@ written down here so it isn't repeated.
 
 ---
 
+## The north star: a light show per track
+
+**Written:** 2026-08-26
+
+Rekordbox offers 8 mood banks × 3 energy levels = 24 combinations, and in practice assigns COOL to almost everything. Even used perfectly, 24 combinations across a whole night becomes repetitive fast. **The end goal is a bespoke light show per track, generated automatically from what the track is and how it is built.**
+
+That goal is reached in three stages. Each stage is independently useful — none is a throwaway step toward the next.
+
+**Stage 1 — Diversify onto the stock banks.** Spread tracks across all 24 existing combinations using rules authored from the DJ's own rekordbox My Tag taxonomy, plus genre and BPM. Zero new lighting content is created: 232 factory macros already exist and most have never played, because two thirds of the library sits on COOL. This is the highest variety-per-unit-of-effort move in the entire plan.
+
+**Stage 2 — Grow the content.** Replace factory macro content with our own, authored as YAML recipes keyed by fixture role. After this the 24 combinations are ours, not Pioneer's.
+
+**Stage 3 — Per-track shows.** Write `phrase_data` directly, driven by each track's own analysed structure. The bank stops being the whole show and becomes merely a starting point.
+
+### Constraints that shape every stage
+
+- **Only 8 banks exist, permanently.** The ninth-bank probe (2026-08-25) proved rekordbox's mood selector is a fixed 8-button surface. Storage tolerates unknown rows; the UI is the hard limit. Any design that needs a 9th bank is dead on arrival.
+- **Content is YAML, never Python.** Established by the RETRO70 reversal. The engine is code; what the lights actually do is data.
+- **`master.db` is read-only forever.** Lighting intent lives in this repository, never written back into rekordbox's library database.
+- **The My Tag panel is a live DJing instrument.** The DJ filters tracks by My Tag mid-set. We read that taxonomy; we never write to it, and we never add categories to it. All lighting-specific mapping lives in this tool's YAML.
+- **rekordbox's energy verdict is not trustworthy at the low end.** Measured: tracks the DJ tags `Background` are called HIGH energy by rekordbox 57.9% of the time and LOW 0% of the time. BPM separates the DJ's own `Situation` labels far more cleanly and monotonically. We override energy; we do not inherit it.
+
+### What we learned getting here
+
+- **E1** (`docs/experiments/E1-library-join.md`) — proved `user.db3 content.song_id` IS `master.db DjmdContent.ID`, decisively (the constant `content.master_db_id = 127286662` matches both `djmdProperty.DBID` and `djmdContent.MasterDBID` on every row — the two databases are two views onto the same library instance). rekordbox's DMX lighting subsystem has never been reverse-engineered publicly; no external reference to `LightingDB`, `macro.db3` or `user.db3` exists anywhere. This project is first. E1 also killed track colour as a design channel: 1.5% library usage, and all 8 colour slots are already renamed for an unrelated mixing workflow.
+- **E1b** (`docs/experiments/E1b-real-denominator.md`) — measured the join over the denominator that matters and found it worse, not better (22.6% of playlist tracks), then established the cause was not data corruption but simply that most tracks had never been through lighting analysis. Refuted the "stale rows are junk" hypothesis: the unmatched rows carry more lighting programming per row than the matched ones.
+- **E1c** (`docs/experiments/E1c-after-full-analysis.md`) — attempted re-measurement after the DJ ran a full-library analysis pass. **Corrected 2026-08-26: the anticipated pass never reached the `content` table at all** — it was byte-for-byte identical before and after, confirmed by direct row diff, not just aggregate counts. E1d/E1d2 later explained why: rekordbox's EXPORT-mode phrase analysis does not touch the LightingDB at all; only actually opening a track in the LIGHTING-mode macro editor creates `content`/`phrase_data` rows (see "How macros get selected for a track" / "Row creation semantics" in the `rekordbox-lightingdb-schema` skill). The concrete `Genres × Mood` combination matrix Stage 1's rules are authored from is real and usable, but it describes the same 1,183-track population E1/E1b already characterized — not an expanded one.
+
+---
+
+## How we accumulate knowledge
+
+**Written:** 2026-08-26, in answer to a direct question: are findings like the E-series actually kept
+around, or does every session re-derive them? Until today the honest answer was *partly* — the
+findings existed only as seven `docs/experiments/` reports that nothing loads by default. This section
+states the standing split going forward.
+
+- **Skills** (`.opencode/skills/*/SKILL.md`) are distilled *operating knowledge* — loaded every
+  session, automatically. They state what is currently true and how to work with it. This is where a
+  probe's durable findings belong once the probe closes.
+- **`docs/experiments/*`** is *evidence and provenance* — the raw measurements, denominators, and
+  methodology behind a finding. Not loaded automatically. Kept forever, and cited by name from the
+  skill that consumes it, for anyone who wants to verify a number rather than take the skill's word for
+  it.
+- **This document** is *why the project exists* — the north star, the staged plan, the mistakes not to
+  repeat. Not a schema or findings reference; those live in the two places above.
+
+**Standing rule: a probe's findings are folded into the skills when it closes.** The report stays as
+the evidence trail; the skill is what the next session actually starts from. A finding that only ever
+lives in an experiment report has not really been retained — it has just been filed.
+
+**E-series index** (verdicts folded into `rekordbox-lightingdb-schema` unless noted):
+
+| probe | one-line verdict |
+|---|---|
+| [E1](../docs/experiments/E1-library-join.md) | `content.song_id` genuinely is `DjmdContent.ID` by design, but 60.1% of rows carry legacy IDs that no longer resolve, and rekordbox's own remap table is empty — unrecoverable by ID alone. |
+| [E1b](../docs/experiments/E1b-real-denominator.md) | The denominator that matters (playlist tracks) joins even worse (22.6%) than E1's headline; the stale rows are not dead weight — they carry *more* lighting programming per row than the resolving ones. |
+| [E1c](../docs/experiments/E1c-after-full-analysis.md) | The anticipated full-library analysis pass never reached the `content` table; the Stage 1 rule matrix is real but still scoped to the same 1,183-track population as E1/E1b. |
+| [E1d](../docs/experiments/E1d-lighting-mode-row-creation.md) | Opening a track in LIGHTING mode created zero new rows this session — the one track already had a row; but changing an existing lit track's bank does rewrite `phrase_data` wholesale from the new bank. |
+| [E1e](../docs/experiments/E1e-phrase-phase-mapping.md) | `phrase_num` ordinal position is not the phase key; `(kind, k1, k2, k3, b) → phase`, read from ANLZ `PSSI`, is a stable per-bank lookup, 99.35% accurate over 13,197 validated rows. |
+| [E1d2](../docs/experiments/E1d2-row-creation-rerun.md) | The project's own ID-resolvability coverage test is not a lighting-absence test — proven directly on a track the DJ had just re-banked live; ground-truthed E1e's forging table 28/28 on a genuinely new row; explained the 61 legacy orphan rows; confirmed no transition layer exists and found a small (36-track) Analysis Lock population. |
+
+---
+
 ## 1. How this started
 
 The session opened in the wrong place: `~/Library/Application Support/Pioneer/rekordbox6`, the live
