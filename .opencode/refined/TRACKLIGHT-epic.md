@@ -43,11 +43,7 @@ Bank assignment, macro content, and phrase-level override compose into an addres
 
 ## Ordering notes
 
-**E2 gates both Stage 1 and Stage 2.** It answers a single question: when we repoint a track's bank, does playback actually change, or does `phrase_data` shadow it? E1f established that `phrase_data` must be rebuilt from the new bank's `macro_assign` and the track's own ANLZ `PSSI` phrase kinds, mirroring rekordbox's own UI behavior. E2 tests whether this reconstruction is accepted and fires during playback. If it does not, the external write strategy needs revisiting. If it does, Stage 1 and Stage 2 are validated as designed. E2 now carries *both* questions together and is more valuable than before.
-
-**Stage 2's bank takeover (S2.2) touches `macro.db3` only** — it needs no `master.db`, no library join and no rules engine. It can therefore proceed in parallel with Stage 1 once E2 returns.
-
-Stage 1 is deliberately sequenced first despite that, because it delivers the most audible variety for the least work: it makes 232 already-existing factory macros reachable, most of which have never played.
+See [`TRACKLIGHT-EXECUTION-ORDER.md`](./TRACKLIGHT-EXECUTION-ORDER.md) for the complete running order. In brief: book the rig session first (it gates E2 and E3), build S1.1 in parallel while waiting, then follow the stage-by-stage sequence. E2's verdict determines whether Stage 1 writes 7,500 rows or 41,742, so do not build S1.3's apply logic ahead of that result.
 
 ## Deliberate assignment: how intent is recorded
 
