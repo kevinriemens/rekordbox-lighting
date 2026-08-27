@@ -18,16 +18,6 @@ rbxlight push --write         # send changes back to rekordbox (backs up first)
 
 ---
 
-## ⚠️ Your rig and venues are not generic
-
-The skill in `.opencode/skills/physical-rig-profile/SKILL.md` documents **one specific person's physical lighting rig** — the fixtures they own, where they're mounted, and how they patch into rekordbox. If you're not that person, **you must edit that skill to match your own hardware before generating or previewing anything.**
-
-The tool loads this skill as ground truth about the physical world. If it's wrong, macros won't fail loudly — they'll produce motion aimed at fixtures that don't exist, or light changes on hardware that can't perform them. Silently.
-
-The same applies to any venue and fixture layout files committed to this repo. Edit them or regenerate them to match your setup.
-
----
-
 ## ⚠️ Read this before anything else
 
 This tool writes to your **live rekordbox lighting databases**. Those are the light show you perform
@@ -44,6 +34,12 @@ Four rules the tool enforces for you, but which you should know anyway:
 4. **Your factory macros are untouchable.** The tool physically cannot modify or delete them.
 
 If something goes wrong, skip to [Undoing a mistake](#undoing-a-mistake).
+
+### ⚠️ Your rig and venues are not generic
+
+The skill in `.opencode/skills/physical-rig-profile/SKILL.md` documents **one specific person's physical lighting rig** — the fixtures they own, where they're mounted, and how they patch into rekordbox. If you're not that person, **you must edit that skill to match your own hardware before generating or previewing anything.**
+The tool loads this skill as ground truth about the physical world. If it's wrong, macros won't fail loudly — they'll produce motion aimed at fixtures that don't exist, or light changes on hardware that can't perform them. Silently.
+The same applies to any venue and fixture layout files committed to this repo. Edit them or regenerate them to match your setup.
 
 ---
 
